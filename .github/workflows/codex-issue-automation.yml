@@ -1,0 +1,289 @@
+name: Codex Issue Automation
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  codex:
+    if: github.event_name == 'issues' && github.event.label.name == 'codex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Classify issue
+        id: issue_type
+        run: |
+          issue_title=$(printf '%s\n' "${{ github.event.issue.title }}")
+          issue_body=$(printf '%s\n' "${{ github.event.issue.body }}")
+
+          issue_kind="generic"
+          requires_tools_tests="false"
+          allow_workflow_changes="false"
+
+          if printf '%s\n' "$issue_title" | grep -q '^\[impl\]'; then
+            issue_kind="implementation"
+            requires_tools_tests="true"
+          elif printf '%s\n' "$issue_title" | grep -q '^\[fix\]'; then
+            issue_kind="fix"
+            requires_tools_tests="true"
+          elif printf '%s\n' "$issue_title" | grep -q '^\[docs\]'; then
+            issue_kind="docs"
+          elif printf '%s\n' "$issue_title" | grep -q '^\[chore\]'; then
+            issue_kind="chore"
+          fi
+
+          if printf '%s\n' "$issue_title" | grep -qi 'workflow' \
+            || printf '%s\n' "$issue_body" | grep -qi 'explicitly permits workflow changes'; then
+            allow_workflow_changes="true"
+            requires_tools_tests="false"
+          fi
+
+          echo "kind=$issue_kind" >> "$GITHUB_OUTPUT"
+          echo "requires_tools_tests=$requires_tools_tests" >> "$GITHUB_OUTPUT"
+          echo "allow_workflow_changes=$allow_workflow_changes" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare prompt
+        run: |
+          mkdir -p .codex
+
+          cat > .codex/prompt.md << 'EOF'
+          You are implementing a GitHub issue for this repository.
+
+          Before making changes, read:
+          - AGENTS.md
+          - docs/ai/SKILLS.md
+          - docs/ai/ARCHITECTURE.md
+          - docs/ai/TESTING.md
+          - docs/ai/DECISIONS.md
+
+          Issue title:
+          ${{ github.event.issue.title }}
+
+          Issue body:
+          ${{ github.event.issue.body }}
+
+          Detected issue kind:
+          ${{ steps.issue_type.outputs.kind }}
+
+          Rules:
+          - Follow AGENTS.md
+          - If the issue explicitly allows scope overrides, follow the issue scope
+          - Do not modify forbidden files
+          - For implementation issues, do not finish with only .codex, prompt, or documentation changes
+          - For implementation issues, include at least one behavior-related change under tools/** and validate it in tests/** when possible
+          - If repository policy blocks the required code path, stop and report the blocked path clearly
+          - Do not touch workflows, deploy, infra, or secrets unless the issue explicitly allows it
+          - Write PR title and body in Japanese
+          - PR title must exactly match the related Issue title
+          - Run cargo check, cargo fmt --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test when possible
+          - If checks fail, record the failure and continue
+          - Stop if approval is required
+          - Keep changes focused on the issue only
+          EOF
+
+      - name: Run Codex
+        id: codex
+        uses: openai/codex-action@v1.6
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .codex/prompt.md
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      - name: Get changed files
+        id: changes
+        run: |
+          changed_files=$(git diff --name-only)
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$changed_files" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Check forbidden paths
+        run: |
+          forbidden=(
+            "infra/"
+            "deploy/"
+            "secrets/"
+            ".env"
+            ".env.local"
+          )
+
+          if [ "${{ steps.issue_type.outputs.allow_workflow_changes }}" != "true" ]; then
+            forbidden+=(".github/workflows/")
+          fi
+
+          echo "${{ steps.changes.outputs.files }}" | while read -r file; do
+            [ -n "$file" ] || continue
+
+            for path in "${forbidden[@]}"; do
+              if [[ "$file" == *"$path"* ]]; then
+                echo "::warning::Forbidden file changed: $file"
+                echo "Reverting $file"
+                git checkout -- "$file"
+              fi
+            done
+          done
+
+      - name: Check diff size
+        run: |
+          changed_files=$(git diff --name-only | wc -l)
+          added_lines=$(git diff --shortstat | grep -o '[0-9]* insertion' | grep -o '[0-9]*' || echo 0)
+          deleted_lines=$(git diff --shortstat | grep -o '[0-9]* deletion' | grep -o '[0-9]*' || echo 0)
+
+          echo "Changed files: $changed_files"
+          echo "Added lines: $added_lines"
+          echo "Deleted lines: $deleted_lines"
+
+      - name: Check dangerous commands
+        run: |
+          forbidden_commands=(
+            "sudo"
+            "curl | sh"
+            "wget | sh"
+            "chmod 777"
+            "mkfs"
+            "dd if="
+            "shutdown"
+            "reboot"
+            "systemctl"
+            "docker system prune"
+            "git push --force"
+            "git reset --hard"
+            "nohup"
+            "tmux"
+            "screen"
+            "disown"
+          )
+
+          files=$(git diff --name-only)
+
+          for file in $files; do
+            [ -f "$file" ] || continue
+
+            for command in "${forbidden_commands[@]}"; do
+              if grep -q "$command" "$file"; then
+                echo "Forbidden command detected in $file: $command"
+                grep "$command" "$file"
+                exit 1
+              fi
+            done
+          done
+
+      - name: Install Rust components
+        run: |
+          rustup component add rustfmt
+          rustup component add clippy
+
+      - name: Format check
+        continue-on-error: true
+        run: cargo fmt --check
+
+      - name: Check meaningful changes
+        run: |
+          if git diff --name-only | grep -v ".codex" | grep -q .; then
+            echo "Valid changes"
+          else
+            echo "No meaningful changes"
+            exit 1
+          fi
+
+      - name: Require implementation file changes
+        run: |
+          if [ "${{ steps.issue_type.outputs.requires_tools_tests }}" = "true" ]; then
+            if git diff --name-only | grep -qE '^(tools/|tests/)'; then
+              echo "Implementation-related files changed"
+            else
+              echo "Expected changes under tools/ or tests/ for issue kind: ${{ steps.issue_type.outputs.kind }}"
+              exit 1
+            fi
+          fi
+
+      - name: Run checks
+        continue-on-error: true
+        run: |
+          cargo check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test
+
+      - name: Check if changes exist
+        id: diffcheck
+        run: |
+          if git diff --quiet -- . ':(exclude).codex'; then
+            echo "no_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Pull Request
+        if: steps.diffcheck.outputs.no_changes == 'false'
+        uses: peter-evans/create-pull-request@v8.1.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Issue #${{ github.event.issue.number }} の対応"
+          title: "${{ github.event.issue.title }}"
+          body: |
+            ## 概要
+            - Issue #${{ github.event.issue.number }} の対応
+            - 種別: `${{ steps.issue_type.outputs.kind }}`
+
+            ## 変更内容
+            - Codex により Issue のスコープに沿って変更を実施
+
+            ## 変更ファイル
+            - 差分を確認してください
+
+            ## テスト結果
+            - cargo check
+            - cargo fmt --check
+            - cargo clippy --all-targets --all-features -- -D warnings
+            - cargo test
+
+            ## 制限事項
+            - チェックが失敗していても、この workflow は警告扱いで継続する場合があります
+            - 自動生成された要約のため、必要に応じて人手で補足してください
+          draft: true
+          branch: codex/issue-${{ github.event.issue.number }}
+
+  quality-gate:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install components
+        run: rustup component add rustfmt clippy
+
+      - name: Cargo check
+        run: cargo check
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test

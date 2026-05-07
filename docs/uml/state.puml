@@ -1,0 +1,21 @@
+@startuml
+
+title gitita Article State
+
+[*] --> DraftPR
+
+DraftPR --> ReviewReady : Ready for review
+
+ReviewReady --> Merged : PR merged
+
+Merged --> Published : Qiita publish success
+
+Published --> Updated : Article updated
+
+Updated --> Published : Re-publish success
+
+Published --> PublishFailed : Publish failed
+
+PublishFailed --> Published : Retry success
+
+@enduml

@@ -1,0 +1,11 @@
+# Global owner
+* @novum-d
+
+# Architecture / governance
+.codex/prompt.md @novum-d
+.github/CODEOWNERS @novum-d
+.github/pull_request_template.md @novum-d
+.github/ISSUE_TEMPLATE/* @novum-d
+
+# CI workflows
+.github/workflows/* @novum-d

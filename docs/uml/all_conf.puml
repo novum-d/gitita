@@ -1,0 +1,62 @@
+@startuml
+
+title gitita - Overall Architecture
+
+skinparam componentStyle rectangle
+
+actor "Article Author" as Author
+actor "Reviewer" as Reviewer
+
+package "GitHub" {
+
+  component "Pull Request" as PR
+  component "review.yml" as ReviewCI
+  component "publish.yml" as PublishCI
+  database "Repository" as Repo
+
+}
+
+package "gitita" {
+
+  component "CLI" as CLI
+
+  component "Frontmatter Parser" as Frontmatter
+  component "Diff Detector" as Diff
+  component "Markdown Parser" as Markdown
+  component "Image Upload Service" as Upload
+  component "Qiita Publisher" as Publisher
+  component "GitHub Issue Service" as Issue
+
+}
+
+cloud "Qiita API" as Qiita
+
+Author --> PR : Create / Update article
+Reviewer --> PR : Review
+
+PR --> ReviewCI : pull_request
+ReviewCI --> CLI : gitita check
+
+CLI --> Frontmatter
+CLI --> Diff
+CLI --> Markdown
+
+ReviewCI --> Repo : Validate repository
+
+PR --> PublishCI : merge to main
+
+PublishCI --> CLI : gitita publish
+
+CLI --> Diff : detect changed articles
+CLI --> Markdown : parse article/images
+CLI --> Upload : upload images
+CLI --> Publisher : publish article
+CLI --> Issue : create failure issue
+
+Upload --> Qiita : upload API
+Publisher --> Qiita : item API
+
+Publisher --> Repo : update qiita_id
+Issue --> Repo : create issue
+
+@enduml

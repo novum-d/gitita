@@ -1,0 +1,34 @@
+@startuml
+
+title gitita Publish Sequence
+
+actor Author
+
+participant GitHub
+participant "publish.yml" as CI
+participant "gitita CLI" as Gitita
+participant "Qiita API" as Qiita
+
+Author -> GitHub : Merge PR to main
+
+GitHub -> CI : Trigger workflow
+
+CI -> Gitita : gitita publish
+
+Gitita -> Gitita : Detect changed articles
+
+Gitita -> Gitita : Parse markdown
+
+Gitita -> Qiita : Upload image
+
+Qiita --> Gitita : Image URL
+
+Gitita -> Qiita : Create/Update article
+
+Qiita --> Gitita : qiita_id
+
+Gitita -> GitHub : Commit qiita_id
+
+CI --> GitHub : Success / Failure
+
+@enduml

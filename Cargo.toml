@@ -1,0 +1,11 @@
+[package]
+name = "gitita"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "tools/src/lib.rs"
+
+[[bin]]
+name = "gitita"
+path = "tools/src/main.rs"

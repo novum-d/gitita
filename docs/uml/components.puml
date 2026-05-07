@@ -1,0 +1,34 @@
+@startuml
+
+title gitita Component Diagram
+
+package "CLI" {
+  [main.rs]
+  [cli]
+}
+
+package "Core" {
+  [article]
+  [diff]
+  [markdown]
+  [workflow]
+}
+
+package "External Integration" {
+  [qiita]
+  [github]
+}
+
+main.rs --> cli
+
+cli --> workflow
+
+workflow --> article
+workflow --> diff
+workflow --> markdown
+workflow --> qiita
+workflow --> github
+
+markdown --> article
+
+@enduml
