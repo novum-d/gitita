@@ -1,3 +1,9 @@
+use std::env;
+use std::process;
+
 fn main() {
-    // TODO: Implement tool execution logic
+    if let Err(error) = gitita::run(env::args().skip(1)) {
+        eprintln!("error: {error}");
+        process::exit(1);
+    }
 }
