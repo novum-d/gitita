@@ -1,45 +1,36 @@
-use std::process::Command;
+use assert_cmd::Command;
+use predicates::str::contains;
 
 #[test]
 fn check_command_succeeds() {
-    let output = Command::new(env!("CARGO_BIN_EXE_gitita"))
-        .arg("check")
-        .output()
-        .expect("failed to run gitita check");
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
-    assert!(
-        output.status.success(),
-        "expected check to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    cmd.arg("check").assert().success();
 }
 
 #[test]
 fn publish_dry_run_command_succeeds() {
-    let output = Command::new(env!("CARGO_BIN_EXE_gitita"))
-        .args(["publish", "--dry-run"])
-        .output()
-        .expect("failed to run gitita publish --dry-run");
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
-    assert!(
-        output.status.success(),
-        "expected publish --dry-run to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    cmd.args(["publish", "--dry-run"]).assert().success();
+}
+
+#[test]
+fn publish_without_dry_run_fails_with_help_message() {
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
+
+    cmd.arg("publish")
+        .assert()
+        .failure()
+        .stderr(contains("publish is not implemented yet; use `publish --dry-run`"));
 }
 
 #[test]
 fn unknown_command_fails_with_readable_message() {
-    let output = Command::new(env!("CARGO_BIN_EXE_gitita"))
-        .arg("unknown")
-        .output()
-        .expect("failed to run gitita unknown");
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
-    assert!(!output.status.success(), "expected unknown command to fail");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("unknown command or arguments: `unknown`"),
-        "expected readable unknown command message, stderr: {stderr}"
-    );
+    cmd.arg("unknown")
+        .assert()
+        .failure()
+        .stderr(contains("unknown command or arguments: `unknown`"));
 }

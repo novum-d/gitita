@@ -93,6 +93,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_publish_command_without_dry_run() {
+        assert_eq!(
+            parse_command(["publish"]),
+            Ok(Command::Publish { dry_run: false })
+        );
+    }
+
+    #[test]
+    fn parses_publish_command_with_other_args_and_dry_run() {
+        // dry-run is an optional flag anywhere after publish
+        assert_eq!(
+            parse_command(["publish", "something", "--dry-run"]),
+            Ok(Command::Publish { dry_run: true })
+        );
+    }
+
+    #[test]
     fn production_publish_returns_clear_error() {
         let error = run(["publish"]).expect_err("publish without dry-run should fail");
 
