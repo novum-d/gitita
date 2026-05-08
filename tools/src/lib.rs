@@ -54,10 +54,10 @@ where
 
     match args.as_slice() {
         [command] if command == "check" => Ok(Command::Check),
-        [command, flag] if command == "publish" && flag == "--dry-run" => {
-            Ok(Command::Publish { dry_run: true })
+        [command, args @ ..] if command == "publish" => {
+            let dry_run = args.iter().any(|arg| arg == "--dry-run");
+            Ok(Command::Publish { dry_run })
         }
-        [command] if command == "publish" => Ok(Command::Publish { dry_run: false }),
         [] => Err(CliError::new(
             "missing command: expected `check` or `publish`",
         )),
