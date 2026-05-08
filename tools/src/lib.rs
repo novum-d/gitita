@@ -1,16 +1,30 @@
-use std::collections::BTreeMap;
+use serde::Deserialize;
+use serde_yaml::Value;
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-type Frontmatter = BTreeMap<String, FrontmatterValue>;
+#[derive(Debug, Deserialize)]
+struct Frontmatter {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<Value>>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_null_as_some_null")]
+    qiita_id: Option<Value>,
 
-#[derive(Debug, PartialEq, Eq)]
-enum FrontmatterValue {
-    Null,
-    String(String),
-    Array,
+    #[serde(default)]
+    published: Option<Value>,
+}
+
+fn deserialize_null_as_some_null<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -117,11 +131,13 @@ fn discover_article_paths(root: &Path) -> Result<Vec<PathBuf>, CliError> {
             articles_dir.display()
         ))
     })?;
+
     let mut paths = Vec::new();
 
     for entry in entries {
         let entry = entry
             .map_err(|error| CliError::new(format!("failed to read article entry: {error}")))?;
+
         let path = entry.path();
 
         if path.is_dir() {
@@ -140,11 +156,12 @@ fn discover_article_paths(root: &Path) -> Result<Vec<PathBuf>, CliError> {
 fn validate_article(path: &Path) -> Result<(), String> {
     let content = fs::read_to_string(path)
         .map_err(|error| format!("{}: failed to read article: {error}", path.display()))?;
+
     let frontmatter = parse_frontmatter(path, &content)?;
 
-    validate_required_string(path, &frontmatter, "title")?;
-    validate_tags(path, &frontmatter)?;
-    validate_required_string(path, &frontmatter, "author")?;
+    validate_required_string(path, "title", frontmatter.title.as_deref())?;
+    validate_tags(path, frontmatter.tags.as_ref())?;
+    validate_required_string(path, "author", frontmatter.author.as_deref())?;
     validate_qiita_id(path, &frontmatter)?;
 
     Ok(())
@@ -183,22 +200,28 @@ fn parse_frontmatter(path: &Path, content: &str) -> Result<Frontmatter, String> 
         ));
     }
 
-    parse_frontmatter_lines(path, &frontmatter_lines)
+    let yaml = frontmatter_lines.join("\n");
+    serde_yaml::from_str::<Frontmatter>(&yaml).map_err(|error| {
+        let error_msg = error.to_string();
+        if error_msg.contains("invalid type: string") && error_msg.contains("expected a sequence") {
+            format!(
+                "{}: frontmatter field `tags` must be an array",
+                path.display()
+            )
+        } else {
+            format!(
+                "{}: failed to parse frontmatter yaml: {error}",
+                path.display()
+            )
+        }
+    })
 }
 
-fn validate_required_string(
-    path: &Path,
-    frontmatter: &Frontmatter,
-    field: &str,
-) -> Result<(), String> {
-    match get_field(frontmatter, field) {
-        Some(FrontmatterValue::String(value)) if !value.trim().is_empty() => Ok(()),
-        Some(FrontmatterValue::String(_)) => Err(format!(
-            "{}: frontmatter field `{field}` must not be empty",
-            path.display()
-        )),
+fn validate_required_string(path: &Path, field: &str, value: Option<&str>) -> Result<(), String> {
+    match value {
+        Some(value) if !value.trim().is_empty() => Ok(()),
         Some(_) => Err(format!(
-            "{}: frontmatter field `{field}` must be a non-empty string",
+            "{}: frontmatter field `{field}` must not be empty",
             path.display()
         )),
         None => Err(format!(
@@ -208,13 +231,9 @@ fn validate_required_string(
     }
 }
 
-fn validate_tags(path: &Path, frontmatter: &Frontmatter) -> Result<(), String> {
-    match get_field(frontmatter, "tags") {
-        Some(FrontmatterValue::Array) => Ok(()),
-        Some(_) => Err(format!(
-            "{}: frontmatter field `tags` must be an array",
-            path.display()
-        )),
+fn validate_tags(path: &Path, tags: Option<&Vec<Value>>) -> Result<(), String> {
+    match tags {
+        Some(_) => Ok(()),
         None => Err(format!(
             "{}: missing required frontmatter field `tags`",
             path.display()
@@ -223,112 +242,30 @@ fn validate_tags(path: &Path, frontmatter: &Frontmatter) -> Result<(), String> {
 }
 
 fn validate_qiita_id(path: &Path, frontmatter: &Frontmatter) -> Result<(), String> {
-    if get_field(frontmatter, "published").is_some() {
+    if frontmatter.published.is_some() {
         return Err(format!(
             "{}: unsupported frontmatter field `published`",
             path.display()
         ));
     }
 
-    match get_field(frontmatter, "qiita_id") {
-        Some(FrontmatterValue::Null) => Ok(()),
-        Some(FrontmatterValue::String(value)) if !value.trim().is_empty() => Ok(()),
-        Some(FrontmatterValue::String(_)) => Err(format!(
+    match &frontmatter.qiita_id {
+        Some(Value::Null) => Ok(()),
+
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(()),
+
+        Some(Value::String(_)) => Err(format!(
             "{}: frontmatter field `qiita_id` must be null or a non-empty value",
             path.display()
         )),
+
         Some(_) => Ok(()),
+
         None => Err(format!(
             "{}: missing required frontmatter field `qiita_id`",
             path.display()
         )),
     }
-}
-
-fn parse_frontmatter_lines(path: &Path, lines: &[&str]) -> Result<Frontmatter, String> {
-    let mut frontmatter = Frontmatter::new();
-    let mut index = 0;
-
-    while index < lines.len() {
-        let line = lines[index];
-
-        if line.trim().is_empty() {
-            index += 1;
-            continue;
-        }
-
-        if line.starts_with(char::is_whitespace) {
-            return Err(format!(
-                "{}: unsupported frontmatter line `{}`",
-                path.display(),
-                line.trim()
-            ));
-        }
-
-        let Some((key, raw_value)) = line.split_once(':') else {
-            return Err(format!(
-                "{}: frontmatter line must contain `key: value`: `{}`",
-                path.display(),
-                line.trim()
-            ));
-        };
-
-        let key = key.trim();
-
-        if key.is_empty() {
-            return Err(format!(
-                "{}: frontmatter key must not be empty",
-                path.display()
-            ));
-        }
-
-        let raw_value = raw_value.trim();
-
-        if raw_value.is_empty() && next_line_starts_array(lines, index + 1) {
-            frontmatter.insert(key.to_owned(), FrontmatterValue::Array);
-
-            index += 1;
-            while index < lines.len() && lines[index].trim_start().starts_with("- ") {
-                index += 1;
-            }
-            continue;
-        }
-
-        frontmatter.insert(key.to_owned(), parse_frontmatter_value(raw_value));
-        index += 1;
-    }
-
-    Ok(frontmatter)
-}
-
-fn next_line_starts_array(lines: &[&str], index: usize) -> bool {
-    lines
-        .get(index)
-        .is_some_and(|line| line.trim_start().starts_with("- "))
-}
-
-fn parse_frontmatter_value(value: &str) -> FrontmatterValue {
-    match value {
-        "null" | "~" => FrontmatterValue::Null,
-        value if value.starts_with('[') && value.ends_with(']') => FrontmatterValue::Array,
-        value => FrontmatterValue::String(unquote(value).to_owned()),
-    }
-}
-
-fn unquote(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
-            value
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        })
-        .unwrap_or(value)
-}
-
-fn get_field<'a>(frontmatter: &'a Frontmatter, field: &str) -> Option<&'a FrontmatterValue> {
-    frontmatter.get(field)
 }
 
 #[cfg(test)]
@@ -359,7 +296,6 @@ mod tests {
 
     #[test]
     fn parses_publish_command_with_other_args_and_dry_run() {
-        // dry-run is an optional flag anywhere after publish
         assert_eq!(
             parse_command(["publish", "something", "--dry-run"]),
             Ok(Command::Publish { dry_run: true })
@@ -394,6 +330,7 @@ mod tests {
     fn rejects_fixture_articles_with_invalid_frontmatter() {
         let fixture = Path::new("tests/fixtures/frontmatter-invalid");
         let error = validate_articles(fixture).expect_err("invalid fixture articles should fail");
+
         let message = error.to_string();
 
         assert!(message.contains("missing required frontmatter field `title`"));
