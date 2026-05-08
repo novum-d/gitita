@@ -2,7 +2,7 @@ name: Codex Issue Automation
 
 on:
   issues:
-    types: [labeled]
+    types: [ labeled ]
   pull_request:
 
 permissions:
@@ -64,24 +64,27 @@ jobs:
 
       - name: Prepare prompt
         run: |
-          mkdir -p .codex
-
-          cat > .codex/prompt.md << 'EOF'
-          You are implementing a GitHub issue for this repository.
-
+          cp .codex/prompt.md /tmp/codex-prompt.md
+          
+          cat >> /tmp/codex-prompt.md << EOF
+          
+          ---
+          
+          ## Runtime Context
+          
           Before making changes, read:
           - AGENTS.md
           - docs/ai/SKILLS.md
           - docs/ai/ARCHITECTURE.md
           - docs/ai/TESTING.md
           - docs/ai/DECISIONS.md
-
+          
           Issue title:
           ${{ github.event.issue.title }}
-
+          
           Issue body:
           ${{ github.event.issue.body }}
-
+          
           Detected issue kind:
           ${{ steps.issue_type.outputs.kind }}
 
@@ -106,7 +109,7 @@ jobs:
         uses: openai/codex-action@v1.6
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: .codex/prompt.md
+          prompt-file: /tmp/codex-prompt.md
           sandbox: workspace-write
           safety-strategy: drop-sudo
 
