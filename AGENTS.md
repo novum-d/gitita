@@ -57,9 +57,6 @@ The following require approval:
 * Workflow changes
 * Changes that deviate from the defined Qiita API integration policy
 
-New Rust dependencies are allowed when they support the documented architecture
-and remain scoped to the requested implementation.
-
 ---
 
 ## Allowed Scope
@@ -70,6 +67,9 @@ Prefer:
 * Article improvements
 * Validation fixes
 * Documentation updates
+
+New Rust dependencies are allowed when they support the documented architecture
+and remain scoped to the requested implementation.
 
 Avoid:
 
@@ -125,6 +125,7 @@ cargo test
 ## Pull Request Rules
 
 All PRs must:
+
 * Be Draft PRs
 * Use English section titles (e.g. `## Summary`, `## Changes`)
 * Write all section contents in Japanese
@@ -135,6 +136,7 @@ All PRs must:
 * Follow AGENTS.md naming conventions
 
 Writing Guidelines
+
 * Keep descriptions concise and concrete
 * Prefer bullet points over paragraphs
 * Explicitly separate implementation details from intent
