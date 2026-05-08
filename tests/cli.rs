@@ -19,10 +19,9 @@ fn publish_dry_run_command_succeeds() {
 fn publish_without_dry_run_fails_with_help_message() {
     let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
-    cmd.arg("publish")
-        .assert()
-        .failure()
-        .stderr(contains("publish is not implemented yet; use `publish --dry-run`"));
+    cmd.arg("publish").assert().failure().stderr(contains(
+        "publish is not implemented yet; use `publish --dry-run`",
+    ));
 }
 
 #[test]
