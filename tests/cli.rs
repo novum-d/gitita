@@ -9,6 +9,33 @@ fn check_command_succeeds() {
 }
 
 #[test]
+fn check_command_accepts_valid_article_frontmatter() {
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
+
+    cmd.current_dir("tests/fixtures/frontmatter-valid")
+        .arg("check")
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_command_rejects_invalid_article_frontmatter() {
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
+
+    cmd.current_dir("tests/fixtures/frontmatter-invalid")
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(contains("missing required frontmatter field `title`"))
+        .stderr(contains("frontmatter field `author` must not be empty"))
+        .stderr(contains("frontmatter field `tags` must be an array"))
+        .stderr(contains(
+            "frontmatter field `qiita_id` must be null or a non-empty value",
+        ))
+        .stderr(contains("unsupported frontmatter field `published`"));
+}
+
+#[test]
 fn publish_dry_run_command_succeeds() {
     let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
