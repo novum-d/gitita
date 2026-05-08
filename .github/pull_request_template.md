@@ -1,48 +1,56 @@
-# Summary
+## Summary
+<!-- Explain the purpose of this PR in 1-3 bullets -->
 
-Describe the purpose of this PR.
+-
 
 ---
 
-# Related Issue
+## Related Issue
+<!-- Example: Closes #123 -->
 
 Closes #
 
 ---
 
-# Changes
+## Changes
+<!-- Describe concrete implementation changes -->
 
-List the main changes.
+-
 
-- [ ]
-- [ ]
-- [ ]
+### Added
+- 
 
----
+### Changed
+- 
 
-# Out of Scope
-
-Explicitly list what this PR does NOT change.
-
-- [ ]
-- [ ]
+### Removed
+- 
 
 ---
 
-# Architecture Impact
+## Intent
+<!-- Why is this change necessary? -->
 
-Does this PR change architecture or workflow behavior?
-
-- [ ] No
-- [ ] Yes (describe below)
-
-If yes, explain clearly.
+-
 
 ---
 
-# Validation
+## Changed Files
+<!-- List representative files -->
 
-Executed locally:
+- `path/to/file`
+
+---
+
+## Architecture Impact
+<!-- Explain architectural decisions or future impact -->
+
+-
+
+---
+
+## Validation
+<!-- Check executed validations -->
 
 - [ ] cargo check
 - [ ] cargo fmt --check
@@ -51,16 +59,42 @@ Executed locally:
 
 ---
 
-# Behavior Verification
+## Behavior Verification
+<!-- Manual verification steps -->
 
-Describe how behavior was verified.
+1.
+2.
+3.
 
-Examples:
+---
 
-- validated frontmatter parsing
-- tested image upload flow
-- tested dry-run behavior
-- verified issue creation
+## Checklist
+<!-- Governance / safety checklist -->
+
+- [ ] Read `.codex/prompt.md`
+- [ ] Read `docs/ai/ARCHITECTURE.md`
+- [ ] Read `docs/ai/DECISIONS.md`
+- [ ] Read `docs/ai/TESTING.md`
+- [ ] Kept implementation scope minimal
+- [ ] Did not modify `.codex/prompt.md`
+- [ ] Did not introduce unrelated refactors
+- [ ] Did not introduce unnecessary dependencies
+- [ ] Did not modify immutable governance files
+- [ ] Added or updated tests if necessary
+
+---
+
+## Limitations
+<!-- Explicitly describe non-goals or remaining work -->
+
+-
+
+---
+
+## Future Work
+<!-- Optional -->
+
+-
 
 ---
 
@@ -88,3 +122,4 @@ Optional notes for reviewers.
 # Screenshots / Logs (Optional)
 
 Add screenshots or logs if useful.
+

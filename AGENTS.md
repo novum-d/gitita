@@ -125,14 +125,27 @@ cargo test
 ## Pull Request Rules
 
 All PRs must:
-
 * Be Draft PRs
-* Be written in Japanese
+* Use English section titles (e.g. `## Summary`, `## Changes`)
+* Write all section contents in Japanese
 * Include summary
 * Include changes
 * Include manual verification steps
 * PR title must exactly match the related Issue title
 * Follow AGENTS.md naming conventions
+
+Writing Guidelines
+* Keep descriptions concise and concrete
+* Prefer bullet points over paragraphs
+* Explicitly separate implementation details from intent
+* Clearly describe limitations and non-goals
+* Avoid vague expressions like "improved" or "fixed things"
+* Mention architectural impact when applicable
+* Include validation and manual verification steps
+* Do not omit unfinished areas; describe them explicitly
+* Do not write marketing-style explanations
+* Do not exaggerate impact or completeness
+* Prefer factual statements over subjective wording
 
 ---
 
