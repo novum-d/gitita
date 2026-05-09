@@ -36,6 +36,29 @@ fn check_command_rejects_invalid_article_frontmatter() {
 }
 
 #[test]
+fn check_command_accepts_valid_markdown_images() {
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
+
+    cmd.current_dir("tests/fixtures/markdown-valid")
+        .arg("check")
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_command_rejects_invalid_markdown_images() {
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
+
+    cmd.current_dir("tests/fixtures/markdown-invalid")
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(contains("must stay inside the article directory"))
+        .stderr(contains("must be relative to the article directory"))
+        .stderr(contains("unsupported image extension `.svg`"));
+}
+
+#[test]
 fn publish_dry_run_command_succeeds() {
     let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
