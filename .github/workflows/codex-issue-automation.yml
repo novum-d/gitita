@@ -2,7 +2,7 @@ name: Codex Issue Automation
 
 on:
   issues:
-    types: [ labeled ]
+    types: [labeled]
   pull_request:
 
 permissions:
@@ -33,8 +33,14 @@ jobs:
       - name: Classify issue
         id: issue_type
         run: |
-          issue_title=$(printf '%s\n' "${{ github.event.issue.title }}")
-          issue_body=$(printf '%s\n' "${{ github.event.issue.body }}")
+          issue_title=$(cat <<'EOF'
+          ${{ github.event.issue.title }}
+          EOF
+          )
+          issue_body=$(cat <<'EOF'
+          ${{ github.event.issue.body }}
+          EOF
+          )
 
           issue_kind="generic"
           requires_tools_tests="false"
@@ -65,26 +71,39 @@ jobs:
       - name: Prepare prompt
         run: |
           cp .codex/prompt.md /tmp/codex-prompt.md
-          
-          cat >> /tmp/codex-prompt.md << EOF
-          
+
+          issue_title=$(cat <<'EOF'
+          ${{ github.event.issue.title }}
+          EOF
+          )
+          issue_body=$(cat <<'EOF'
+          ${{ github.event.issue.body }}
+          EOF
+          )
+          issue_kind=$(cat <<'EOF'
+          ${{ steps.issue_type.outputs.kind }}
+          EOF
+          )
+
+          cat >> /tmp/codex-prompt.md << 'EOF'
+
           ---
-          
+
           ## Runtime Context
-          
+
           Before making changes, read:
           - AGENTS.md
           - docs/ai/SKILLS.md
           - docs/ai/ARCHITECTURE.md
           - docs/ai/TESTING.md
           - docs/ai/DECISIONS.md
-          
+
           Issue title:
           ${{ github.event.issue.title }}
-          
+
           Issue body:
           ${{ github.event.issue.body }}
-          
+
           Detected issue kind:
           ${{ steps.issue_type.outputs.kind }}
 
@@ -135,11 +154,21 @@ jobs:
             ".env.local"
           )
 
-          if [ "${{ steps.issue_type.outputs.allow_workflow_changes }}" != "true" ]; then
+          allow_workflow_changes=$(cat <<'EOF'
+          ${{ steps.issue_type.outputs.allow_workflow_changes }}
+          EOF
+          )
+
+          if [ "$allow_workflow_changes" != "true" ]; then
             forbidden+=(".github/workflows/")
           fi
 
-          echo "${{ steps.changes.outputs.files }}" | while read -r file; do
+          files=$(cat <<'EOF'
+          ${{ steps.changes.outputs.files }}
+          EOF
+          )
+
+          echo "$files" | while read -r file; do
             [ -n "$file" ] || continue
 
             for path in "${forbidden[@]}"; do
@@ -216,7 +245,15 @@ jobs:
 
       - name: Require implementation file changes
         run: |
-          if [ "${{ steps.issue_type.outputs.requires_tools_tests }}" = "true" ]; then
+          issue_kind=$(cat <<'EOF'
+          ${{ steps.issue_type.outputs.kind }}
+          EOF
+          )
+          requires_tools_tests=$(cat <<'EOF'
+          ${{ steps.issue_type.outputs.requires_tools_tests }}
+          EOF
+          )
+          if [ "$requires_tools_tests" = "true" ]; then
             if git diff --name-only | grep -qE '^(tools/|tests/)'; then
               echo "Implementation-related files changed"
             else
