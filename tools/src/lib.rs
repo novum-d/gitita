@@ -5,6 +5,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod diff;
+
 #[derive(Debug, Deserialize)]
 struct Frontmatter {
     #[serde(default)]
