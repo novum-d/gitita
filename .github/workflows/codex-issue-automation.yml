@@ -102,6 +102,10 @@ jobs:
           - If checks fail, record the failure and continue
           - Stop if approval is required
           - Keep changes focused on the issue only
+          - Read `.github/pull_request_template.md`
+          - Generate COMPLETE PR body
+          - Replace all placeholders
+          - Save PR body to /tmp/pr-body.md
           EOF
 
       - name: Run Codex
@@ -242,127 +246,9 @@ jobs:
         uses: peter-evans/create-pull-request@v8.1.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Issue #${{ github.event.issue.number }} の対応"
+          commit-message: "Issue #${{ github.event.issue.number }}"
           title: "${{ github.event.issue.title }}"
-          body: |
-            ## Summary
-            <!-- Explain the purpose of this PR in 1-3 bullets -->
-            -
-            
-            ## Related Issue
-            Closes #${{ github.event.issue.number }}
-
-            ---
-
-            ## Changes
-            <!-- Describe concrete implementation changes -->
-
-            -
-
-            ### Added
-            - 
-
-            ### Changed
-            - 
-
-            ### Removed
-            - 
-
-            ---
-
-            ## Intent
-            <!-- Why is this change necessary? -->
-
-            -
-
-            ---
-
-            ## Changed Files
-            <!-- List representative files -->
-            ${{ steps.changes.outputs.files }}
-
-            ---
-
-            ## Architecture Impact
-            <!-- Explain architectural decisions or future impact -->
-
-            -
-
-            ---
-
-            ## Validation
-            <!-- Check executed validations -->
-
-            - [ ] cargo check
-            - [ ] cargo fmt --check
-            - [ ] cargo clippy --all-targets --all-features -- -D warnings
-            - [ ] cargo test
-
-            ---
-
-            ## Behavior Verification
-            <!-- Manual verification steps -->
-
-            1.
-            2.
-            3.
-
-            ---
-
-            ## Checklist
-            <!-- Governance / safety checklist -->
-
-            - [ ] Read `.codex/prompt.md`
-            - [ ] Read `docs/ai/ARCHITECTURE.md`
-            - [ ] Read `docs/ai/DECISIONS.md`
-            - [ ] Read `docs/ai/TESTING.md`
-            - [ ] Kept implementation scope minimal
-            - [ ] Did not modify `.codex/prompt.md`
-            - [ ] Did not introduce unrelated refactors
-            - [ ] Did not introduce unnecessary dependencies
-            - [ ] Did not modify immutable governance files
-            - [ ] Added or updated tests if necessary
-
-            ---
-
-            ## Limitations
-            <!-- Explicitly describe non-goals or remaining work -->
-
-            -
-
-            ---
-
-            ## Future Work
-            <!-- Optional -->
-
-            -
-
-            ---
-
-            # Checklist
-
-            - [ ] Read `.codex/prompt.md`
-            - [ ] Read `docs/ai/ARCHITECTURE.md`
-            - [ ] Read `docs/ai/DECISIONS.md`
-            - [ ] Read `docs/ai/TESTING.md`
-            - [ ] Kept implementation scope minimal
-            - [ ] Did not modify `.codex/prompt.md`
-            - [ ] Did not introduce unrelated refactors
-            - [ ] Did not introduce unnecessary dependencies
-            - [ ] Did not modify immutable governance files
-            - [ ] Added or updated tests if necessary
-
-            ---
-
-            # Notes for Reviewers
-
-            Optional notes for reviewers.
-
-            ---
-
-            # Screenshots / Logs (Optional)
-
-            Add screenshots or logs if useful.
+          body-path: /tmp/pr-body.md
           draft: true
           branch: codex/issue-${{ github.event.issue.number }}
 
