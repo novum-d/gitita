@@ -144,14 +144,14 @@ fn parse_name_status_line(line: &str) -> Result<DiffEntry, DiffError> {
 
     match parts.as_slice() {
         [status, path] if !status.is_empty() => Ok(DiffEntry::Changed {
-            status: (*status).to_owned(),
-            path: (*path).to_owned(),
+            status: status.to_string(),
+            path: path.to_string(),
         }),
         [status, old_path, new_path] if status.starts_with('R') && !old_path.is_empty() => {
             Ok(DiffEntry::Renamed {
-                status: (*status).to_owned(),
-                old_path: (*old_path).to_owned(),
-                new_path: (*new_path).to_owned(),
+                status: status.to_string(),
+                old_path: old_path.to_string(),
+                new_path: new_path.to_string(),
             })
         }
         _ => Err(DiffError::InvalidDiffLine(line.to_owned())),
@@ -270,7 +270,7 @@ mod tests {
         let articles = changed_articles_from_name_status(
             "R100\tarticles/rust-clap-intro/images/old.png\tarticles/rust-clap-intro/images/new.png\n",
         )
-        .expect("same article directory rename should be allowed by diff detector");
+            .expect("same article directory rename should be allowed by diff detector");
 
         assert_eq!(
             articles,
@@ -286,7 +286,7 @@ mod tests {
         let articles = changed_articles_from_name_status(
             "A\tarticles/rust-clap-intro/article.md\nA\tarticles/rust-clap-intro/images/example.png\n",
         )
-        .expect("one new article should be allowed");
+            .expect("one new article should be allowed");
 
         assert_eq!(
             articles,
