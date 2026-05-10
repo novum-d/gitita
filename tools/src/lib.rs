@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod diff;
+pub mod markdown;
 
 #[derive(Debug, Deserialize)]
 struct Frontmatter {
@@ -165,6 +166,13 @@ fn validate_article(path: &Path) -> Result<(), String> {
     validate_tags(path, frontmatter.tags.as_ref())?;
     validate_required_string(path, "author", frontmatter.author.as_deref())?;
     validate_qiita_id(path, &frontmatter)?;
+    markdown::validate_image_references(path, &content).map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
 
     Ok(())
 }

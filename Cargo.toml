@@ -11,6 +11,7 @@ name = "gitita"
 path = "tools/src/main.rs"
 
 [dependencies]
+pulldown-cmark = "0.10"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = "0.9.33"
 
