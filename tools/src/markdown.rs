@@ -142,7 +142,7 @@ pub fn collect_image_references(markdown: &str) -> Vec<ImageReference> {
                     });
                 }
             }
-            Event::Html(html) => {
+            Event::Html(html) | Event::InlineHtml(html) => {
                 references.extend(
                     html_img_sources(&html)
                         .into_iter()
