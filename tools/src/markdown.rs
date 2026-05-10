@@ -283,12 +283,12 @@ fn validate_supported_extension(
 
     match extension {
         Some(extension)
-        if SUPPORTED_IMAGE_EXTENSIONS
-            .iter()
-            .any(|supported| extension.eq_ignore_ascii_case(supported)) =>
-            {
-                Ok(())
-            }
+            if SUPPORTED_IMAGE_EXTENSIONS
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported)) =>
+        {
+            Ok(())
+        }
         Some(extension) => Err(ImageValidationError::UnsupportedExtension {
             article_path: article_path.to_path_buf(),
             source: source.to_owned(),
@@ -491,8 +491,8 @@ fn read_src_attribute(attributes: &str) -> Option<String> {
 fn skip_whitespace(text: &str, index: usize) -> usize {
     index
         + text[index..]
-        .find(|character: char| !character.is_ascii_whitespace())
-        .unwrap_or(text[index..].len())
+            .find(|character: char| !character.is_ascii_whitespace())
+            .unwrap_or(text[index..].len())
 }
 
 fn read_attribute_value(attributes: &str, index: usize) -> (String, usize) {
