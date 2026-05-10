@@ -194,12 +194,15 @@ fn validate_image_reference(
         });
     }
 
+    // パスの正規化とサポートされている拡張子の検証
     let normalized_path = normalize_local_path(article_path, source)?;
     validate_supported_extension(article_path, source, &normalized_path)?;
 
+    // シンボリックリンクの検証
     let image_path = article_dir.join(&normalized_path);
     validate_no_symlinked_components(article_path, source, article_dir, &normalized_path)?;
 
+    // メタデータの有無とシンボリックリンクの検証
     let metadata =
         fs::symlink_metadata(&image_path).map_err(|_| ImageValidationError::MissingFile {
             article_path: article_path.to_path_buf(),
@@ -230,6 +233,7 @@ fn normalize_local_path(
     article_path: &Path,
     source: &str,
 ) -> Result<PathBuf, ImageValidationError> {
+    // 空文字、バックスラッシュ、Windowsのドライブパスは、unsafeパスとして扱う
     if source.trim().is_empty() || source.contains('\\') || is_windows_drive_path(source) {
         return Err(ImageValidationError::UnsafePath {
             article_path: article_path.to_path_buf(),
@@ -241,8 +245,13 @@ fn normalize_local_path(
 
     for component in Path::new(source).components() {
         match component {
+            // 通常のディレクトリ、ファイル名は、ローカルパスとして扱う
             Component::Normal(part) => path.push(part),
+
+            // カレントディレクトリは無視する
             Component::CurDir => {}
+
+            // 絶対パス、親ディレクトリへの参照、プレフィックス（C:やfile:などの特有のドライブパス）はunsafeパスとして扱う
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
                 return Err(ImageValidationError::UnsafePath {
                     article_path: article_path.to_path_buf(),
@@ -252,6 +261,7 @@ fn normalize_local_path(
         }
     }
 
+    // 空のパス（.）はunsafeパスとして扱う
     if path.as_os_str().is_empty() {
         return Err(ImageValidationError::UnsafePath {
             article_path: article_path.to_path_buf(),
@@ -273,12 +283,12 @@ fn validate_supported_extension(
 
     match extension {
         Some(extension)
-            if SUPPORTED_IMAGE_EXTENSIONS
-                .iter()
-                .any(|supported| extension.eq_ignore_ascii_case(supported)) =>
-        {
-            Ok(())
-        }
+        if SUPPORTED_IMAGE_EXTENSIONS
+            .iter()
+            .any(|supported| extension.eq_ignore_ascii_case(supported)) =>
+            {
+                Ok(())
+            }
         Some(extension) => Err(ImageValidationError::UnsupportedExtension {
             article_path: article_path.to_path_buf(),
             source: source.to_owned(),
@@ -300,16 +310,19 @@ fn validate_no_symlinked_components(
     let mut current = article_dir.to_path_buf();
 
     for component in image_path.components() {
+        // 通常のディレクトリ、ファイルパス出ない場合は、スキップ
         let Component::Normal(part) = component else {
             continue;
         };
 
         current.push(part);
 
+        // メタデータが存在しない場合は、スキップ
         let Ok(metadata) = fs::symlink_metadata(&current) else {
             continue;
         };
 
+        // シンボリックリンクである場合は、シンボリックリンクエラーとして返す
         if metadata.file_type().is_symlink() {
             return Err(ImageValidationError::Symlink {
                 article_path: article_path.to_path_buf(),
@@ -326,14 +339,17 @@ fn is_local_reference(source: &str) -> bool {
     let source = source.trim();
     let lowercase = source.to_ascii_lowercase();
 
+    // 空文字列、アンカー参照（ページ内リンク）、はスキーマなしURL（プロトコル相対URL）は、ローカル参照とみなさない
     if source.is_empty() || source.starts_with('#') || source.starts_with("//") {
         return false;
     }
 
+    // Windowsドライブパスまたはバックスラッシュが含まれている場合は、ローカル参照とする
     if source.contains('\\') || is_windows_drive_path(source) {
         return true;
     }
 
+    // スキーマありのURL（RFC 3986に基づく外部URL）である場合は、ローカル参照とみなさない
     if let Some(colon_index) = lowercase.find(':') {
         let slash_index = lowercase.find('/').unwrap_or(usize::MAX);
         let hash_index = lowercase.find('#').unwrap_or(usize::MAX);
@@ -359,6 +375,7 @@ fn html_img_sources(html: &str) -> Vec<String> {
     let mut index = 0;
 
     while index < bytes.len() {
+        // 開始タグが見つからない場合は、終了
         let Some(tag_start_offset) = html[index..].find('<') else {
             break;
         };
@@ -366,6 +383,7 @@ fn html_img_sources(html: &str) -> Vec<String> {
         let tag_start = index + tag_start_offset;
         let tag_name_start = tag_start + 1;
 
+        // 文字列の一番最後に`<`が置かれているまたは、`<`の次が`/`である場合は、スキップ
         if tag_name_start >= bytes.len() || bytes[tag_name_start] == b'/' {
             index = tag_name_start;
             continue;
@@ -373,17 +391,20 @@ fn html_img_sources(html: &str) -> Vec<String> {
 
         let tag_name_end = read_tag_name_end(html, tag_name_start);
 
+        // タグ名がimgまたはIMGでない場合はスキップ
         if !html[tag_name_start..tag_name_end].eq_ignore_ascii_case("img") {
             index = tag_name_end;
             continue;
         }
 
+        // 終了タグが見つからない場合は、終了
         let Some(tag_end) = find_tag_end(html, tag_name_end) else {
             break;
         };
 
         let attributes = &html[tag_name_end..tag_end];
 
+        // src属性と値が見つかった場合は、srcの値を返す
         if let Some(source) = read_src_attribute(attributes) {
             sources.push(source);
         }
@@ -407,9 +428,13 @@ fn find_tag_end(html: &str, start: usize) -> Option<usize> {
 
     for (offset, character) in html[start..].char_indices() {
         match (quote, character) {
+            // quotationから抜けるとき（保存したquoteと同一）
             (Some(active_quote), current) if active_quote == current => quote = None,
+            // quotationに入るとき
             (None, '"' | '\'') => quote = Some(character),
+            // タグの終了時
             (None, '>') => return Some(start + offset),
+            // それ以外（クォーテーション内に>がある場合など）
             _ => {}
         }
     }
@@ -421,6 +446,7 @@ fn read_src_attribute(attributes: &str) -> Option<String> {
     let mut index = 0;
 
     while index < attributes.len() {
+        // 属性を読み取る
         index = skip_whitespace(attributes, index);
 
         if index >= attributes.len() {
@@ -440,17 +466,20 @@ fn read_src_attribute(attributes: &str) -> Option<String> {
         }
 
         let name = &attributes[name_start..name_end];
-        index = skip_whitespace(attributes, name_end);
 
+        // = を読み取る
+        index = skip_whitespace(attributes, name_end);
         if !attributes[index..].starts_with('=') {
             continue;
         }
 
+        // = に続く属性の値を読み取る
         index = skip_whitespace(attributes, index + 1);
 
         let (value, next_index) = read_attribute_value(attributes, index);
         index = next_index;
 
+        // 属性がsrcであれば、srcの値を返す
         if name.eq_ignore_ascii_case("src") {
             return Some(value);
         }
@@ -462,20 +491,25 @@ fn read_src_attribute(attributes: &str) -> Option<String> {
 fn skip_whitespace(text: &str, index: usize) -> usize {
     index
         + text[index..]
-            .find(|character: char| !character.is_ascii_whitespace())
-            .unwrap_or(text[index..].len())
+        .find(|character: char| !character.is_ascii_whitespace())
+        .unwrap_or(text[index..].len())
 }
 
 fn read_attribute_value(attributes: &str, index: usize) -> (String, usize) {
+    // 属性の値が無い場合は、空文字を返す
     let Some(first) = attributes[index..].chars().next() else {
         return (String::new(), index);
     };
 
+    // クォートがある場合、クォートで囲っている内側の値を返す
     if first == '"' || first == '\'' {
         let value_start = index + first.len_utf8();
+
+        // 終了のクォートが見つからない場合は、最初のクォートより後ろの文字列を全て返す
         let Some(value_end_offset) = attributes[value_start..].find(first) else {
             return (attributes[value_start..].to_owned(), attributes.len());
         };
+
         let value_end = value_start + value_end_offset;
 
         return (
@@ -484,6 +518,7 @@ fn read_attribute_value(attributes: &str, index: usize) -> (String, usize) {
         );
     }
 
+    // クォートが無い場合、値を返す
     let value_end = attributes[index..]
         .find(|character: char| character.is_ascii_whitespace() || character == '>')
         .map_or(attributes.len(), |offset| index + offset);
