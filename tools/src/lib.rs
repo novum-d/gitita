@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 pub mod diff;
 pub mod markdown;
+pub mod qiita;
 
 #[derive(Debug, Deserialize)]
 struct Frontmatter {
