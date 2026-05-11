@@ -63,7 +63,7 @@ impl QiitaConfig {
 impl fmt::Debug for QiitaConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QiitaConfig")
-            .field("token", &"<redacted>")
+            .field("token", &"***")
             .field("api_base_url", &self.api_base_url)
             .field("upload_url", &self.upload_url)
             .field("timeout", &self.timeout)
@@ -457,7 +457,7 @@ mod tests {
         let config = QiitaConfig::new("super-secret-token").expect("token should be accepted");
         let debug = format!("{config:?}");
 
-        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("***"));
         assert!(!debug.contains("super-secret-token"));
     }
 
