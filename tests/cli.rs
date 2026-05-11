@@ -62,7 +62,10 @@ fn check_command_rejects_invalid_markdown_images() {
 fn publish_dry_run_command_succeeds() {
     let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
-    cmd.args(["publish", "--dry-run"]).assert().success();
+    cmd.env_remove("QIITA_TOKEN")
+        .args(["publish", "--dry-run"])
+        .assert()
+        .success();
 }
 
 #[test]
