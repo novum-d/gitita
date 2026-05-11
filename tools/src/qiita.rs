@@ -7,46 +7,63 @@ use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-const DEFAULT_API_BASE_URL: &str = "https://qiita.com/api/v2";
-const DEFAULT_UPLOAD_URL: &str = "https://qiita.com/api/v2/images";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct QiitaConfig {
     token: String,
     api_base_url: String,
-    upload_url: String,
+    upload_policies_url: String,
     timeout: Duration,
 }
 
 impl QiitaConfig {
     pub fn from_env() -> Result<Self, QiitaError> {
+        dotenvy::dotenv().ok();
         let token = env::var("QIITA_TOKEN").map_err(|_| QiitaError::MissingToken)?;
-        Self::new(token)
+        let api_base_url = env::var("API_BASE_URL").map_err(|_| QiitaError::MissingBaseUrl)?;
+        let upload_policies_url =
+            env::var("UPLOAD_POLICIES_URL").map_err(|_| QiitaError::MissingUploadPoliciesUrl)?;
+        Self::new(token, api_base_url, upload_policies_url)
     }
 
-    pub fn new(token: impl Into<String>) -> Result<Self, QiitaError> {
+    pub fn new(
+        token: impl Into<String>,
+        api_base_url: impl Into<String>,
+        upload_policies_url: impl Into<String>,
+    ) -> Result<Self, QiitaError> {
         let token = token.into();
+        let api_base_url = api_base_url.into();
+        let upload_policies_url = upload_policies_url.into();
 
         if token.trim().is_empty() {
             return Err(QiitaError::MissingToken);
         }
+        if api_base_url.trim().is_empty() {
+            return Err(QiitaError::MissingBaseUrl);
+        }
+        if upload_policies_url.trim().is_empty() {
+            return Err(QiitaError::MissingUploadPoliciesUrl);
+        }
 
         Ok(Self {
             token,
-            api_base_url: DEFAULT_API_BASE_URL.to_owned(),
-            upload_url: DEFAULT_UPLOAD_URL.to_owned(),
+            api_base_url,
+            upload_policies_url,
             timeout: DEFAULT_TIMEOUT,
         })
     }
 
     pub fn with_api_base_url(mut self, api_base_url: impl Into<String>) -> Self {
-        self.api_base_url = api_base_url.into().trim_end_matches('/').to_owned();
+        self.api_base_url = api_base_url
+            .into()
+            .trim_end_matches('/') // 文字連結時の二重バックスラッシュ防止
+            .to_owned();
         self
     }
 
-    pub fn with_upload_url(mut self, upload_url: impl Into<String>) -> Self {
-        self.upload_url = upload_url.into();
+    pub fn with_upload_policies_url(mut self, upload_policies_url: impl Into<String>) -> Self {
+        self.upload_policies_url = upload_policies_url.into();
         self
     }
 
@@ -63,9 +80,9 @@ impl QiitaConfig {
 impl fmt::Debug for QiitaConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QiitaConfig")
-            .field("token", &"***")
+            .field("token", &"***") // ログ出力時に生のトークンを隠す
             .field("api_base_url", &self.api_base_url)
-            .field("upload_url", &self.upload_url)
+            .field("upload_policies_url", &self.upload_policies_url)
             .field("timeout", &self.timeout)
             .finish()
     }
@@ -101,22 +118,63 @@ impl QiitaClient {
             path: image_path.display().to_string(),
             source: error,
         })?;
-        let part = reqwest::multipart::Part::bytes(bytes).file_name(file_name);
-        let form = reqwest::multipart::Form::new().part("image", part);
+        let content_type = mime_guess::from_path(image_path)
+            .first_or_octet_stream()
+            .to_string();
 
-        let response = self
+        // Qiita APIからS3署名済みポリシーを取得
+        let policy_request = UploadPolicyRequest {
+            image: ImageMeta {
+                size: bytes.len() as u64,
+                content_type: content_type.clone(),
+                name: file_name.clone(),
+            },
+        };
+        let policy_response = self
             .http
-            .request(Method::POST, &self.config.upload_url)
+            .request(Method::POST, &self.config.upload_policies_url)
             .header(AUTHORIZATION, self.authorization_header())
             .header(ACCEPT, "application/json")
+            .json(&policy_request)
+            .send()
+            .await
+            .map_err(QiitaError::Request)?;
+        let policy = self
+            .parse_response::<UploadPolicyResponse>(policy_response)
+            .await?;
+
+        // S3に直接アップロード
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(file_name);
+        let form = reqwest::multipart::Form::new()
+            .text("key", policy.form.key.clone())
+            .text("acl", policy.form.acl)
+            .text("Content-Type", policy.form.content_type)
+            .text("policy", policy.form.policy)
+            .text("x-amz-credential", policy.form.x_amz_credential)
+            .text("x-amz-algorithm", policy.form.x_amz_algorithm)
+            .text("x-amz-date", policy.form.x_amz_date)
+            .text("x-amz-signature", policy.form.x_amz_signature)
+            .part("file", part);
+        let s3_response = self
+            .http
+            .post(&policy.upload_url)
             .multipart(form)
             .send()
             .await
             .map_err(QiitaError::Request)?;
 
-        self.parse_response::<ImageUploadResponse>(response)
-            .await?
-            .try_into()
+        if !s3_response.status().is_success() {
+            let status = s3_response.status();
+            let text = s3_response.text().await.unwrap_or_default();
+            return Err(QiitaError::Api {
+                status,
+                message: parse_error_message(&text),
+            });
+        }
+
+        Ok(UploadedImage {
+            url: format!("{}/{}", policy.upload_url, policy.form.key),
+        })
     }
 
     pub async fn create_article(
@@ -199,6 +257,8 @@ pub struct QiitaArticleRequest {
     pub body: String,
     pub tags: Vec<QiitaTag>,
     pub private: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization_url_name: Option<String>,
     pub tweet: bool,
 }
 
@@ -212,7 +272,10 @@ impl QiitaArticleRequest {
             title: title.into(),
             body: body.into(),
             tags,
-            private: false,
+            private: env::var("PRIVATE").map(|v| v == "true").unwrap_or(true),
+            organization_url_name: env::var("ORGANIZATION_URL_NAME")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             tweet: false,
         };
 
@@ -274,28 +337,46 @@ pub struct UploadedImage {
     pub url: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct ImageUploadResponse {
-    url: Option<String>,
-    image_url: Option<String>,
+#[derive(Debug, Serialize)]
+struct UploadPolicyRequest {
+    image: ImageMeta,
 }
 
-impl TryFrom<ImageUploadResponse> for UploadedImage {
-    type Error = QiitaError;
+#[derive(Debug, Serialize)]
+struct ImageMeta {
+    size: u64,
+    content_type: String,
+    name: String,
+}
 
-    fn try_from(response: ImageUploadResponse) -> Result<Self, Self::Error> {
-        let url = response
-            .url
-            .or(response.image_url)
-            .ok_or(QiitaError::ResponseMissingField("url"))?;
+#[derive(Debug, Deserialize)]
+struct UploadPolicyResponse {
+    upload_url: String,
+    form: UploadPolicyForm,
+}
 
-        Ok(Self { url })
-    }
+#[derive(Debug, Deserialize)]
+struct UploadPolicyForm {
+    key: String,
+    acl: String,
+    policy: String,
+    #[serde(rename = "Content-Type")]
+    content_type: String,
+    #[serde(rename = "x-amz-credential")]
+    x_amz_credential: String,
+    #[serde(rename = "x-amz-algorithm")]
+    x_amz_algorithm: String,
+    #[serde(rename = "x-amz-date")]
+    x_amz_date: String,
+    #[serde(rename = "x-amz-signature")]
+    x_amz_signature: String,
 }
 
 #[derive(Debug)]
 pub enum QiitaError {
     MissingToken,
+    MissingBaseUrl,
+    MissingUploadPoliciesUrl,
     InvalidArticle(&'static str),
     InvalidItemId(String),
     InvalidImagePath(String),
@@ -317,6 +398,10 @@ impl fmt::Display for QiitaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingToken => write!(f, "QIITA_TOKEN environment variable is required"),
+            Self::MissingBaseUrl => write!(f, "API_BASE_URL environment variable is required"),
+            Self::MissingUploadPoliciesUrl => {
+                write!(f, "UPLOAD_POLICIES_URL environment variable is required")
+            }
             Self::InvalidArticle(message) => write!(f, "invalid Qiita article request: {message}"),
             Self::InvalidItemId(item_id) => write!(f, "invalid Qiita item id: `{item_id}`"),
             Self::InvalidImagePath(path) => write!(f, "invalid image path: `{path}`"),
@@ -389,8 +474,8 @@ fn validate_item_id(item_id: &str) -> Result<(), QiitaError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_error_message, validate_item_id, ImageUploadResponse, QiitaArticleRequest,
-        QiitaConfig, QiitaError, QiitaTag, UploadedImage,
+        parse_error_message, validate_item_id, QiitaArticleRequest, QiitaConfig, QiitaError,
+        QiitaTag,
     };
     use serde_json::json;
     use std::time::Duration;
@@ -417,7 +502,7 @@ mod tests {
                         "versions": ["1.80"]
                     }
                 ],
-                "private": false,
+                "private": true,
                 "tweet": false
             })
         );
@@ -435,7 +520,12 @@ mod tests {
 
     #[test]
     fn config_requires_non_empty_token() {
-        let error = QiitaConfig::new(" ").expect_err("empty token should fail");
+        let error = QiitaConfig::new(
+            " ",
+            "https://qiita.com/api/v2",
+            "https://qiita.com/api/upload/policies",
+        )
+        .expect_err("empty token should fail");
 
         assert_eq!(
             error.to_string(),
@@ -445,16 +535,25 @@ mod tests {
 
     #[test]
     fn config_uses_explicit_default_timeout() {
-        let config = QiitaConfig::new("secret")
-            .expect("token should be accepted")
-            .with_timeout(Duration::from_secs(12));
+        let config = QiitaConfig::new(
+            "secret",
+            "https://qiita.com/api/v2",
+            "https://qiita.com/api/upload/policies",
+        )
+        .expect("token should be accepted")
+        .with_timeout(Duration::from_secs(12));
 
         assert_eq!(config.timeout(), Duration::from_secs(12));
     }
 
     #[test]
     fn config_debug_redacts_token() {
-        let config = QiitaConfig::new("super-secret-token").expect("token should be accepted");
+        let config = QiitaConfig::new(
+            "super-secret-token",
+            "https://qiita.com/api/v2",
+            "https://qiita.com/api/upload/policies",
+        )
+        .expect("token should be accepted");
         let debug = format!("{config:?}");
 
         assert!(debug.contains("***"));
@@ -475,16 +574,5 @@ mod tests {
         let message = parse_error_message(r#"{"message":"Unauthorized","type":"unauthorized"}"#);
 
         assert_eq!(message, "Unauthorized");
-    }
-
-    #[test]
-    fn upload_response_accepts_url_or_image_url() {
-        let uploaded = UploadedImage::try_from(ImageUploadResponse {
-            url: None,
-            image_url: Some("https://example.com/image.png".to_owned()),
-        })
-        .expect("image_url fallback should be accepted");
-
-        assert_eq!(uploaded.url, "https://example.com/image.png");
     }
 }
