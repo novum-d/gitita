@@ -8,20 +8,21 @@ use std::path::{Path, PathBuf};
 pub mod diff;
 pub mod markdown;
 pub mod qiita;
+pub mod workflow;
 
 #[derive(Debug, Deserialize)]
-struct Frontmatter {
+pub(crate) struct Frontmatter {
     #[serde(default)]
-    title: Option<String>,
+    pub(crate) title: Option<String>,
     #[serde(default)]
-    tags: Option<Vec<Value>>,
+    pub(crate) tags: Option<Vec<Value>>,
     #[serde(default)]
-    author: Option<String>,
+    pub(crate) author: Option<String>,
     #[serde(default, deserialize_with = "deserialize_null_as_some_null")]
-    qiita_id: Option<Value>,
+    pub(crate) qiita_id: Option<Value>,
 
     #[serde(default)]
-    published: Option<Value>,
+    pub(crate) published: Option<Value>,
 }
 
 fn deserialize_null_as_some_null<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
@@ -65,10 +66,7 @@ where
 {
     match parse_command(args)? {
         Command::Check => check(),
-        Command::Publish { dry_run: true } => publish_dry_run(),
-        Command::Publish { dry_run: false } => Err(CliError::new(
-            "publish is not implemented yet; use `publish --dry-run`",
-        )),
+        Command::Publish { dry_run } => publish(dry_run),
     }
 }
 
@@ -157,7 +155,7 @@ fn discover_article_paths(root: &Path) -> Result<Vec<PathBuf>, CliError> {
     Ok(paths)
 }
 
-fn validate_article(path: &Path) -> Result<(), String> {
+pub(crate) fn validate_article(path: &Path) -> Result<(), String> {
     let content = fs::read_to_string(path)
         .map_err(|error| format!("{}: failed to read article: {error}", path.display()))?;
 
@@ -178,41 +176,19 @@ fn validate_article(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn publish_dry_run() -> Result<(), CliError> {
-    Ok(())
+fn publish(dry_run: bool) -> Result<(), CliError> {
+    let options = workflow::PublishOptions::from_env(dry_run);
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|error| CliError::new(format!("failed to start async runtime: {error}")))?;
+
+    runtime
+        .block_on(workflow::publish(Path::new("."), options))
+        .map_err(|error| CliError::new(error.to_string()))
 }
 
-fn parse_frontmatter(path: &Path, content: &str) -> Result<Frontmatter, String> {
-    let mut lines = content.lines();
-
-    if lines.next() != Some("---") {
-        return Err(format!(
-            "{}: missing frontmatter opening delimiter `---`",
-            path.display()
-        ));
-    }
-
-    let mut frontmatter_lines = Vec::new();
-    let mut found_closing_delimiter = false;
-
-    for line in lines {
-        if line == "---" {
-            found_closing_delimiter = true;
-            break;
-        }
-
-        frontmatter_lines.push(line);
-    }
-
-    if !found_closing_delimiter {
-        return Err(format!(
-            "{}: missing frontmatter closing delimiter `---`",
-            path.display()
-        ));
-    }
-
-    let yaml = frontmatter_lines.join("\n");
-    serde_yaml::from_str::<Frontmatter>(&yaml).map_err(|error| {
+pub(crate) fn parse_frontmatter(path: &Path, content: &str) -> Result<Frontmatter, String> {
+    let (yaml, _) = split_frontmatter(path, content)?;
+    serde_yaml::from_str::<Frontmatter>(yaml).map_err(|error| {
         let error_msg = error.to_string();
         if error_msg.contains("invalid type: string") && error_msg.contains("expected a sequence") {
             format!(
@@ -226,6 +202,48 @@ fn parse_frontmatter(path: &Path, content: &str) -> Result<Frontmatter, String> 
             )
         }
     })
+}
+
+pub(crate) fn split_frontmatter<'a>(
+    path: &Path,
+    content: &'a str,
+) -> Result<(&'a str, &'a str), String> {
+    let mut lines = content.lines();
+
+    if lines.next() != Some("---") {
+        return Err(format!(
+            "{}: missing frontmatter opening delimiter `---`",
+            path.display()
+        ));
+    }
+
+    let frontmatter_start = content
+        .find('\n')
+        .map(|index| index + 1)
+        .unwrap_or(content.len());
+    let Some(closing_offset) = content[frontmatter_start..].find("\n---") else {
+        return Err(format!(
+            "{}: missing frontmatter closing delimiter `---`",
+            path.display()
+        ));
+    };
+
+    let frontmatter_end = frontmatter_start + closing_offset;
+    let delimiter_start = frontmatter_end + 1;
+    let delimiter_end = delimiter_start + 3;
+
+    let body_start = if content[delimiter_end..].starts_with("\r\n") {
+        delimiter_end + 2
+    } else if content[delimiter_end..].starts_with('\n') {
+        delimiter_end + 1
+    } else {
+        delimiter_end
+    };
+
+    Ok((
+        &content[frontmatter_start..frontmatter_end],
+        &content[body_start..],
+    ))
 }
 
 fn validate_required_string(path: &Path, field: &str, value: Option<&str>) -> Result<(), String> {
@@ -281,7 +299,7 @@ fn validate_qiita_id(path: &Path, frontmatter: &Frontmatter) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_command, run, validate_articles, Command};
+    use super::{parse_command, split_frontmatter, validate_articles, Command};
     use std::path::Path;
 
     #[test]
@@ -314,16 +332,6 @@ mod tests {
     }
 
     #[test]
-    fn production_publish_returns_clear_error() {
-        let error = run(["publish"]).expect_err("publish without dry-run should fail");
-
-        assert_eq!(
-            error.to_string(),
-            "publish is not implemented yet; use `publish --dry-run`"
-        );
-    }
-
-    #[test]
     fn unknown_command_returns_error() {
         let error = parse_command(["unknown"]).expect_err("unknown command should fail");
 
@@ -349,5 +357,17 @@ mod tests {
         assert!(message.contains("frontmatter field `tags` must be an array"));
         assert!(message.contains("frontmatter field `qiita_id` must be null or a non-empty value"));
         assert!(message.contains("unsupported frontmatter field `published`"));
+    }
+
+    #[test]
+    fn splits_frontmatter_and_body_without_rewriting_markdown() {
+        let path = Path::new("articles/example/article.md");
+        let content = "---\ntitle: Example\ntags: []\nauthor: codex\nqiita_id: null\n---\n# Body\n";
+
+        let (frontmatter, body) =
+            split_frontmatter(path, content).expect("frontmatter should split");
+
+        assert!(frontmatter.contains("title: Example"));
+        assert_eq!(body, "# Body\n");
     }
 }

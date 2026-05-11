@@ -36,9 +36,11 @@ qiita_id: null
 ```bash
 cargo run -- check
 cargo run -- publish --dry-run
+cargo run -- publish
 ```
 
-`publish` 本体は Qiita API 連携の実装後に有効化します。
+`publish` は `GITITA_DIFF_BASE` と `GITITA_DIFF_HEAD` の差分から対象記事を検出します。
+未指定の場合は `HEAD^` と `HEAD` を比較します。
 
 ---
 
