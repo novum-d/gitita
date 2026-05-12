@@ -316,7 +316,7 @@ fn qiita_tag(path: &Path, value: Value) -> Result<QiitaTag, WorkflowError> {
         Value::String(name) if !name.trim().is_empty() => Ok(QiitaTag::new(name)),
         Value::Mapping(mapping) => {
             let name = mapping
-                .get(&Value::String("name".to_owned()))
+                .get("name")
                 .and_then(Value::as_str)
                 .filter(|name| !name.trim().is_empty())
                 .ok_or_else(|| WorkflowError::InvalidFrontmatter {
@@ -324,7 +324,7 @@ fn qiita_tag(path: &Path, value: Value) -> Result<QiitaTag, WorkflowError> {
                     message: "tag mapping must include a non-empty `name`".to_owned(),
                 })?;
             let versions = mapping
-                .get(&Value::String("versions".to_owned()))
+                .get("versions")
                 .and_then(Value::as_sequence)
                 .map(|versions| {
                     versions
