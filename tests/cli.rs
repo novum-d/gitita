@@ -77,7 +77,7 @@ fn publish_without_dry_run_requires_qiita_token() {
 
     cmd.env("GITITA_DIFF_BASE", "HEAD")
         .env("GITITA_DIFF_HEAD", "HEAD")
-        .env_remove("QIITA_TOKEN")
+        .env("QIITA_TOKEN", "")
         .arg("publish")
         .assert()
         .failure()
