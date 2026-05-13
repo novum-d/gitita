@@ -63,18 +63,30 @@ fn publish_dry_run_command_succeeds() {
     let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
     cmd.env_remove("QIITA_TOKEN")
+        .env("GITITA_DIFF_BASE", "HEAD")
+        .env("GITITA_DIFF_HEAD", "HEAD")
         .args(["publish", "--dry-run"])
         .assert()
-        .success();
+        .success()
+        .stdout(contains("No changed articles to publish."));
 }
 
 #[test]
-fn publish_without_dry_run_fails_with_help_message() {
+fn publish_without_dry_run_requires_qiita_token() {
     let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
-    cmd.arg("publish").assert().failure().stderr(contains(
-        "publish is not implemented yet; use `publish --dry-run`",
-    ));
+    cmd.env("GITITA_DIFF_BASE", "HEAD")
+        .env("GITITA_DIFF_HEAD", "HEAD")
+        .env("API_BASE_URL", "https://example.invalid/api/v2")
+        .env(
+            "UPLOAD_POLICIES_URL",
+            "https://example.invalid/api/v2/upload_policies",
+        )
+        .env("QIITA_TOKEN", "")
+        .arg("publish")
+        .assert()
+        .failure()
+        .stderr(contains("QIITA_TOKEN environment variable is required"));
 }
 
 #[test]
