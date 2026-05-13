@@ -77,6 +77,11 @@ fn publish_without_dry_run_requires_qiita_token() {
 
     cmd.env("GITITA_DIFF_BASE", "HEAD")
         .env("GITITA_DIFF_HEAD", "HEAD")
+        .env("API_BASE_URL", "https://example.invalid/api/v2")
+        .env(
+            "UPLOAD_POLICIES_URL",
+            "https://example.invalid/api/v2/upload_policies",
+        )
         .env("QIITA_TOKEN", "")
         .arg("publish")
         .assert()
