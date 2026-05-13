@@ -217,7 +217,8 @@ pub fn replace_image_sources(markdown: &str, replacements: &[(String, String)]) 
     let mut output = String::with_capacity(markdown.len());
     let mut in_fenced_code = false;
 
-    for line in markdown.split_inclusive('\n') {  // 改行コード付きでループ
+    for line in markdown.split_inclusive('\n') {
+        // 改行コード付きでループ
         // 純粋なテキストのみを安全にパースするために、一旦、コンテンツと改行コード(CRLF, LF)を分ける
         let content = line
             .strip_suffix("\r\n")
@@ -683,7 +684,6 @@ fn replace_html_image_sources_in_line(line: &str, replacements: &[(String, Strin
     let bytes = line.as_bytes();
 
     while index < bytes.len() {
-
         // `<`が見つからない場合、imgタグとして扱わない
         let Some(tag_start_offset) = line[index..].find('<') else {
             output.push_str(&line[index..]);
@@ -822,10 +822,10 @@ fn read_attribute_value_with_range(text: &str, index: usize) -> (String, usize, 
         .map_or(text.len(), |offset| index + offset);
 
     (
-        text[index..value_end].to_owned(),   // 属性値
-        index,                               // 属性値の開始位置
-        value_end,                           // 属性値の終了位置
-        value_end,                           // 属性値のの次の位置
+        text[index..value_end].to_owned(), // 属性値
+        index,                             // 属性値の開始位置
+        value_end,                         // 属性値の終了位置
+        value_end,                         // 属性値のの次の位置
     )
 }
 
