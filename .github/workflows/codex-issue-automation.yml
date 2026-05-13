@@ -84,6 +84,10 @@ jobs:
           ${{ steps.issue_type.outputs.kind }}
           EOF
           )
+          allow_workflow_changes=$(cat <<'EOF'
+          ${{ steps.issue_type.outputs.allow_workflow_changes }}
+          EOF
+          )
 
           cat >> /tmp/codex-prompt.md << 'EOF'
 
@@ -119,13 +123,20 @@ jobs:
           - PR title must exactly match the related Issue title
           - Run cargo check, cargo fmt --check, cargo clippy --all-targets --all-features -- -D warnings, cargo test when possible
           - If checks fail, record the failure and continue
-          - Stop if approval is required
+          - Stop if approval is required, except workflow changes explicitly permitted by issue scope
           - Keep changes focused on the issue only
           - Read `.github/pull_request_template.md`
           - Generate COMPLETE PR body
           - Replace all placeholders
           - Save PR body to /tmp/pr-body.md
           EOF
+
+          if [ "$allow_workflow_changes" = "true" ]; then
+            cat >> /tmp/codex-prompt.md << 'EOF'
+          - Workflow changes requested by this issue are explicitly approved by a human reviewer
+          - Do not stop for additional approval when editing .github/workflows/* files that are in issue scope
+          EOF
+          fi
 
       - name: Run Codex
         id: codex
@@ -139,7 +150,12 @@ jobs:
       - name: Get changed files
         id: changes
         run: |
-          changed_files=$(git diff --name-only)
+          changed_files=$(
+            {
+              git diff --name-only
+              git ls-files --others --exclude-standard
+            } | sort -u
+          )
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           echo "$changed_files" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
@@ -158,6 +174,20 @@ jobs:
           ${{ steps.issue_type.outputs.allow_workflow_changes }}
           EOF
           )
+          issue_title=$(cat <<'EOF'
+          ${{ github.event.issue.title }}
+          EOF
+          )
+          issue_body=$(cat <<'EOF'
+          ${{ github.event.issue.body }}
+          EOF
+          )
+          if printf '%s\n' "$issue_title" | grep -qi 'workflow' \
+            || printf '%s\n' "$issue_body" | grep -qi 'explicitly permits workflow changes'; then
+            allow_workflow_changes="true"
+          fi
+
+          echo "allow_workflow_changes=$allow_workflow_changes"
 
           if [ "$allow_workflow_changes" != "true" ]; then
             forbidden+=(".github/workflows/")
@@ -182,7 +212,12 @@ jobs:
 
       - name: Check diff size
         run: |
-          changed_files=$(git diff --name-only | wc -l)
+          changed_files=$(
+            {
+              git diff --name-only
+              git ls-files --others --exclude-standard
+            } | sort -u | wc -l
+          )
           added_lines=$(git diff --shortstat | grep -o '[0-9]* insertion' | grep -o '[0-9]*' || echo 0)
           deleted_lines=$(git diff --shortstat | grep -o '[0-9]* deletion' | grep -o '[0-9]*' || echo 0)
 
@@ -211,7 +246,12 @@ jobs:
             "disown"
           )
 
-          files=$(git diff --name-only)
+          files=$(
+            {
+              git diff --name-only
+              git ls-files --others --exclude-standard
+            } | sort -u
+          )
 
           for file in $files; do
             [ -f "$file" ] || continue
@@ -236,7 +276,15 @@ jobs:
 
       - name: Check meaningful changes
         run: |
-          if git diff --name-only | grep -v ".codex" | grep -q .; then
+          meaningful_files=$(
+            {
+              git diff --name-only
+              git ls-files --others --exclude-standard
+            } | grep -v '^\.\?codex/' | sort -u
+          )
+          echo "Changed files after guards:"
+          echo "$meaningful_files"
+          if [ -n "$meaningful_files" ]; then
             echo "Valid changes"
           else
             echo "No meaningful changes"
@@ -254,7 +302,13 @@ jobs:
           EOF
           )
           if [ "$requires_tools_tests" = "true" ]; then
-            if git diff --name-only | grep -qE '^(tools/|tests/)'; then
+            files=$(
+              {
+                git diff --name-only
+                git ls-files --others --exclude-standard
+              } | sort -u
+            )
+            if echo "$files" | grep -qE '^(tools/|tests/)'; then
               echo "Implementation-related files changed"
             else
               echo "Expected changes under tools/ or tests/ for issue kind: ${{ steps.issue_type.outputs.kind }}"
@@ -272,7 +326,7 @@ jobs:
       - name: Check if changes exist
         id: diffcheck
         run: |
-          if git diff --quiet -- . ':(exclude).codex'; then
+          if git diff --quiet -- . ':(exclude).codex' && [ -z "$(git ls-files --others --exclude-standard | grep -v '^\.\?codex/')" ]; then
             echo "no_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "no_changes=false" >> "$GITHUB_OUTPUT"
@@ -282,7 +336,7 @@ jobs:
         if: steps.diffcheck.outputs.no_changes == 'false'
         uses: peter-evans/create-pull-request@v8.1.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CODEX_PR_TOKEN }}
           commit-message: "Issue #${{ github.event.issue.number }}"
           title: "${{ github.event.issue.title }}"
           body-path: /tmp/pr-body.md
