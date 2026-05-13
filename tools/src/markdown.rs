@@ -213,16 +213,19 @@ pub fn replace_image_sources(markdown: &str, replacements: &[(String, String)]) 
         return markdown.to_owned();
     }
 
+    // 元の Markdown と同等以上の長さになることが予想されるため、あらかじめメモリ領域を確保する
     let mut output = String::with_capacity(markdown.len());
     let mut in_fenced_code = false;
 
-    for line in markdown.split_inclusive('\n') {
+    for line in markdown.split_inclusive('\n') {  // 改行コード付きでループ
+        // 純粋なテキストのみを安全にパースするために、一旦、コンテンツと改行コード(CRLF, LF)を分ける
         let content = line
             .strip_suffix("\r\n")
             .or_else(|| line.strip_suffix('\n'))
             .unwrap_or(line);
         let ending = &line[content.len()..];
 
+        // コードブロック内での画像置換処理を避けるためにコードブロック判定を行い、そのまま出力
         if is_fence_line(content) {
             in_fenced_code = !in_fenced_code;
             output.push_str(line);
@@ -234,7 +237,10 @@ pub fn replace_image_sources(markdown: &str, replacements: &[(String, String)]) 
             continue;
         }
 
+        // コードブロック外での画像置換処理を行い、出力
         output.push_str(&replace_image_sources_in_line(content, replacements));
+
+        // 改行コードを復元
         output.push_str(ending);
     }
 
@@ -507,13 +513,13 @@ fn read_src_attribute(attributes: &str) -> Option<String> {
     let mut index = 0;
 
     while index < attributes.len() {
-        // 属性を読み取る
         index = skip_whitespace(attributes, index);
 
         if index >= attributes.len() {
             return None;
         }
 
+        // 属性を読み取る
         let name_start = index;
         let name_end = attributes[index..]
             .find(|character: char| {
@@ -604,38 +610,55 @@ fn replacement_for<'a>(source: &str, replacements: &'a [(String, String)]) -> Op
         .map(|(_, to)| to.as_str())
 }
 
-fn replace_markdown_image_sources_in_line(line: &str, replacements: &[(String, String)]) -> String {
-    let mut output = String::with_capacity(line.len());
-    let mut index = 0;
+const IMAGE_PREFIX: &str = "![";
+const LABEL_SUFFIX: &str = "](";
+const IMAGE_SUFFIX: &str = ")";
 
-    while let Some(start_offset) = line[index..].find("![") {
+fn replace_markdown_image_sources_in_line(line: &str, replacements: &[(String, String)]) -> String {
+    // あらかじめ1行分のメモリを確保
+    let mut output = String::with_capacity(line.len());
+
+    let mut index = 0;
+    while let Some(start_offset) = line[index..].find(IMAGE_PREFIX) {
         let start = index + start_offset;
+
+        // 画像マークダウンのプレフィックス`!`より前の文字列を退避
         output.push_str(&line[index..start]);
 
-        let Some(label_end_offset) = line[start + 2..].find("](") else {
+        // 画像マークダウンのラベルのサフィックス`](`が見つからない場合、画像マークダウンとして扱わない
+        let Some(label_end_offset) = line[start + IMAGE_PREFIX.len()..].find(LABEL_SUFFIX) else {
             output.push_str(&line[start..]);
             return output;
         };
-        let source_start = start + 2 + label_end_offset + 2;
 
-        let Some(source_end_offset) = line[source_start..].find(')') else {
+        // 画像マークダウンのサフィックス`)`が見つからない場合、画像マークダウンとして扱わない
+        let source_start = start + IMAGE_PREFIX.len() + label_end_offset + LABEL_SUFFIX.len();
+        let Some(source_end_offset) = line[source_start..].find(IMAGE_SUFFIX) else {
             output.push_str(&line[start..]);
             return output;
         };
+
+        // `![...](`の文字列を退避
         let source_end = source_start + source_end_offset;
+        output.push_str(&line[start..source_start]);
+
+        // srcから画像パスとツールチップを取得
         let source = &line[source_start..source_end];
         let (source_path, source_suffix) = markdown_destination_parts(source);
 
-        output.push_str(&line[start..source_start]);
+        // ローカルの画像パスとリモートの画像パスを置換
         if let Some(replacement) = replacement_for(source_path, replacements) {
             output.push_str(replacement);
             output.push_str(source_suffix);
         } else {
             output.push_str(source);
         }
-        output.push(')');
 
-        index = source_end + 1;
+        // 画像マークダウン記述のサフィックス`)`で最後に閉じる
+        output.push_str(IMAGE_SUFFIX);
+
+        // 次の文字列を読み込むために`)`の後ろにインデックスを置く
+        index = source_end + IMAGE_SUFFIX.len();
     }
 
     output.push_str(&line[index..]);
@@ -643,34 +666,43 @@ fn replace_markdown_image_sources_in_line(line: &str, replacements: &[(String, S
 }
 
 fn markdown_destination_parts(destination: &str) -> (&str, &str) {
+    // ツールチップが存在しない場合、画像パスと空のツールチップを返す
     let Some(split_index) = destination.find(char::is_whitespace) else {
         return (destination, "");
     };
 
+    // ツールチップが存在する場合、画像パスとツールチップを分割して返す
     (&destination[..split_index], &destination[split_index..])
 }
 
 fn replace_html_image_sources_in_line(line: &str, replacements: &[(String, String)]) -> String {
-    let bytes = line.as_bytes();
+    // あらかじめ1行分のメモリを確保
     let mut output = String::with_capacity(line.len());
+
     let mut index = 0;
+    let bytes = line.as_bytes();
 
     while index < bytes.len() {
+
+        // `<`が見つからない場合、imgタグとして扱わない
         let Some(tag_start_offset) = line[index..].find('<') else {
             output.push_str(&line[index..]);
             return output;
         };
 
+        // `<`より前の文字列を退避
         let tag_start = index + tag_start_offset;
         output.push_str(&line[index..tag_start]);
 
-        let tag_name_start = tag_start + 1;
+        // タグ開始直後に 途切れているまたは`/`が続く場合は、スキップ
+        let tag_name_start = tag_start + '<'.len_utf8();
         if tag_name_start >= bytes.len() || bytes[tag_name_start] == b'/' {
             output.push('<');
             index = tag_name_start;
             continue;
         }
 
+        // imgタグでない場合は、スキップ
         let tag_name_end = read_tag_name_end(line, tag_name_start);
         if !line[tag_name_start..tag_name_end].eq_ignore_ascii_case("img") {
             output.push_str(&line[tag_start..tag_name_end]);
@@ -678,11 +710,13 @@ fn replace_html_image_sources_in_line(line: &str, replacements: &[(String, Strin
             continue;
         }
 
+        // タグ名の終わりが見つからない場合、imgタグとして扱わない
         let Some(tag_end) = find_tag_end(line, tag_name_end) else {
             output.push_str(&line[tag_start..]);
             return output;
         };
 
+        // ローカルの画像パスとリモートの画像パスを置換
         let tag = &line[tag_start..=tag_end];
         if let Some((source_start, source_end, source)) = find_src_attribute_value(tag) {
             output.push_str(&tag[..source_start]);
@@ -696,23 +730,25 @@ fn replace_html_image_sources_in_line(line: &str, replacements: &[(String, Strin
             output.push_str(tag);
         }
 
-        index = tag_end + 1;
+        index = tag_end + '>'.len_utf8();
     }
 
     output
 }
 
 fn find_src_attribute_value(attributes_with_tag: &str) -> Option<(usize, usize, String)> {
-    let tag_name_end = read_tag_name_end(attributes_with_tag, 1);
+    let tag_name_end = read_tag_name_end(attributes_with_tag, '<'.len_utf8());
     let mut index = tag_name_end;
 
     while index < attributes_with_tag.len() {
         index = skip_whitespace(attributes_with_tag, index);
 
+        // src属性を見つけられないまま「最後の文字列」または「>」タグに到達してしまった場合、探索を終了する
         if index >= attributes_with_tag.len() || attributes_with_tag[index..].starts_with('>') {
             return None;
         }
 
+        // 属性名を読み取る
         let name_start = index;
         let name_end = attributes_with_tag[index..]
             .find(|character: char| {
@@ -720,22 +756,28 @@ fn find_src_attribute_value(attributes_with_tag: &str) -> Option<(usize, usize, 
             })
             .map_or(attributes_with_tag.len(), |offset| index + offset);
 
+        // 開始・終了が`=`または`/`（空白はすでにskip_whitespaceによりスキップ）の場合、無効な記号としてスキップ
         if name_start == name_end {
-            index += 1;
+            index += 1; // `=`と`/`は1バイト
             continue;
         }
 
+        // 属性名を取得
         let name = &attributes_with_tag[name_start..name_end];
+
+        // 属性名の次の`=`が無い場合は、スキップ
         index = skip_whitespace(attributes_with_tag, name_end);
         if !attributes_with_tag[index..].starts_with('=') {
             continue;
         }
 
-        index = skip_whitespace(attributes_with_tag, index + 1);
+        // 属性値を取得
+        index = skip_whitespace(attributes_with_tag, index + '='.len_utf8());
         let (value, value_start, value_end, next_index) =
             read_attribute_value_with_range(attributes_with_tag, index);
         index = next_index;
 
+        // 属性名が`src`の場合、属性値を返す
         if name.eq_ignore_ascii_case("src") {
             return Some((value_start, value_end, value));
         }
@@ -745,12 +787,16 @@ fn find_src_attribute_value(attributes_with_tag: &str) -> Option<(usize, usize, 
 }
 
 fn read_attribute_value_with_range(text: &str, index: usize) -> (String, usize, usize, usize) {
+    // `<img src=`のような不完全なHTMLタグを読み込んでしまった場合は、空の属性値で返す
     let Some(first) = text[index..].chars().next() else {
         return (String::new(), index, index, index);
     };
 
+    // 引用符あり
     if first == '"' || first == '\'' {
         let value_start = index + first.len_utf8();
+
+        // 閉じる引用符が見つからない場合、不完全なタグとして扱う
         let Some(value_end_offset) = text[value_start..].find(first) else {
             return (
                 text[value_start..].to_owned(),
@@ -759,8 +805,9 @@ fn read_attribute_value_with_range(text: &str, index: usize) -> (String, usize, 
                 text.len(),
             );
         };
-        let value_end = value_start + value_end_offset;
 
+        // 閉じる引用符が見つかった場合、その位置まで属性値として返す
+        let value_end = value_start + value_end_offset;
         return (
             text[value_start..value_end].to_owned(),
             value_start,
@@ -769,15 +816,16 @@ fn read_attribute_value_with_range(text: &str, index: usize) -> (String, usize, 
         );
     }
 
+    // 引用符なし
     let value_end = text[index..]
         .find(|character: char| character.is_ascii_whitespace() || character == '>')
         .map_or(text.len(), |offset| index + offset);
 
     (
-        text[index..value_end].to_owned(),
-        index,
-        value_end,
-        value_end,
+        text[index..value_end].to_owned(),   // 属性値
+        index,                               // 属性値の開始位置
+        value_end,                           // 属性値の終了位置
+        value_end,                           // 属性値のの次の位置
     )
 }
 
