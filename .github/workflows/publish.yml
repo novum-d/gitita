@@ -1,0 +1,114 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: gitita-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish public articles
+        id: publish
+        continue-on-error: true
+        env:
+          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
+          API_BASE_URL: ${{ vars.API_BASE_URL || 'https://qiita.com/api/v2' }}
+          UPLOAD_POLICIES_URL: ${{ vars.UPLOAD_POLICIES_URL || 'https://qiita.com/api/v2/upload/policies' }}
+          GITITA_DIFF_BASE: ${{ github.event.before }}
+          GITITA_DIFF_HEAD: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          cargo run -- publish 2>&1 | tee /tmp/gitita-publish.log
+
+      - name: Commit qiita_id update
+        if: steps.publish.outcome == 'success'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add articles
+          if git diff --cached --quiet; then
+            echo "No qiita_id changes to commit."
+          else
+            git commit -m "chore: update published qiita_id"
+            git push
+          fi
+
+      - name: Create or update publish failure issue
+        if: steps.publish.outcome == 'failure'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const {execSync} = require('child_process');
+            const {owner, repo} = context.repo;
+            const changed = execSync('git diff --name-only ${{ github.event.before }} ${{ github.sha }} -- articles || true', {encoding: 'utf8'});
+            const slug = changed.split('\n').map(line => line.split('/')).find(parts => parts[0] === 'articles' && parts[1])?.[1] || 'unknown';
+            const title = `[publish-failed] ${slug}`;
+            const log = fs.existsSync('/tmp/gitita-publish.log') ? fs.readFileSync('/tmp/gitita-publish.log', 'utf8').slice(-12000) : 'No publish log was captured.';
+            const body = [
+              `Publish failed for \`${slug}\`.`,
+              '',
+              `Workflow run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+              '',
+              '```text',
+              log,
+              '```'
+            ].join('\n');
+
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100
+            });
+            const issue = existing.find(item => item.title === title);
+            const target = issue
+              ? await github.rest.issues.createComment({owner, repo, issue_number: issue.number, body})
+              : await github.rest.issues.create({owner, repo, title, body});
+
+            const articlePath = `articles/${slug}/article.md`;
+            if (fs.existsSync(articlePath)) {
+              const match = fs.readFileSync(articlePath, 'utf8').match(/^author:\s*"?([^"\n]+)"?/m);
+              const assignee = match?.[1]?.trim();
+              if (assignee) {
+                try {
+                  await github.rest.issues.addAssignees({
+                    owner,
+                    repo,
+                    issue_number: issue ? issue.number : target.data.number,
+                    assignees: [assignee]
+                  });
+                } catch (error) {
+                  core.warning(`Failed to assign ${assignee}: ${error.message}`);
+                }
+              }
+            }
+
+      - name: Fail publish workflow
+        if: steps.publish.outcome == 'failure'
+        run: exit 1
