@@ -283,12 +283,10 @@ fn validate_qiita_id(path: &Path, frontmatter: &Frontmatter) -> Result<(), Strin
 
         Some(Value::String(value)) if !value.trim().is_empty() => Ok(()),
 
-        Some(Value::String(_)) => Err(format!(
+        Some(_) => Err(format!(
             "{}: frontmatter field `qiita_id` must be null or a non-empty value",
             path.display()
         )),
-
-        Some(_) => Ok(()),
 
         None => Err(format!(
             "{}: missing required frontmatter field `qiita_id`",
