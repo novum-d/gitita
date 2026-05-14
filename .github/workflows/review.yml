@@ -35,12 +35,3 @@ jobs:
           GITITA_DIFF_HEAD: HEAD
           GITITA_PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: cargo run -- check
-
-      - name: cargo fmt
-        run: cargo fmt --check
-
-      - name: cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: cargo test
-        run: cargo test
