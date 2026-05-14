@@ -3,6 +3,8 @@ name: Article Preview Publish
 on:
   pull_request:
     types: [ready_for_review, synchronize]
+    paths:
+      - 'articles/**'
 
 permissions:
   contents: write
@@ -16,16 +18,31 @@ concurrency:
 
 jobs:
   preview:
-    if: >-
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'github-actions[bot]' &&
-      contains(github.event.pull_request.labels.*.name, 'article')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
+      - name: Resolve preview gate
+        id: gate
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const labels = (pr.labels || []).map(label => label.name);
+            const reasons = [];
+            if (pr.draft) reasons.push('draft PR');
+            if (pr.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) reasons.push('head repo mismatch');
+            if (!labels.includes('article')) reasons.push('missing article label');
+            const shouldRun = reasons.length === 0;
+            core.setOutput('should_run', shouldRun ? 'true' : 'false');
+            if (shouldRun) {
+              core.notice('Preview gate passed.');
+            } else {
+              core.notice(`Preview gate skipped: ${reasons.join(', ')}`);
+            }
+
       - name: Checkout PR branch
+        if: steps.gate.outputs.should_run == 'true'
         uses: actions/checkout@v5
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -34,15 +51,59 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Rust
+        if: steps.gate.outputs.should_run == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
+        if: steps.gate.outputs.should_run == 'true'
         uses: Swatinem/rust-cache@v2
 
+      - name: Resolve Qiita token secret
+        if: steps.gate.outputs.should_run == 'true'
+        id: token
+        uses: actions/github-script@v8
+        env:
+          QIITA_TOKEN_MAP_JSON: ${{ vars.QIITA_TOKEN_MAP_JSON || '' }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        with:
+          script: |
+            const author = process.env.PR_AUTHOR;
+            const fallback = 'QIITA_TOKEN';
+            let secretName = fallback;
+
+            const raw = (process.env.QIITA_TOKEN_MAP_JSON || '').trim();
+            if (raw) {
+              try {
+                const map = JSON.parse(raw);
+                if (typeof map[author] === 'string' && map[author].trim()) {
+                  secretName = map[author].trim();
+                } else if (typeof map.default === 'string' && map.default.trim()) {
+                  secretName = map.default.trim();
+                }
+              } catch (error) {
+                core.warning(`Failed to parse QIITA_TOKEN_MAP_JSON: ${error.message}`);
+              }
+            }
+
+            core.notice(`Selected Qiita token secret for ${author}: ${secretName}`);
+            core.setOutput('secret_name', secretName);
+
+      - name: Validate resolved Qiita token
+        if: steps.gate.outputs.should_run == 'true'
+        env:
+          QIITA_TOKEN: ${{ secrets[steps.token.outputs.secret_name] }}
+        run: |
+          set -euo pipefail
+          if [ -z "${QIITA_TOKEN:-}" ]; then
+            echo "Resolved secret is empty or not found: ${{ steps.token.outputs.secret_name }}" >&2
+            exit 1
+          fi
+
       - name: Publish private preview
+        if: steps.gate.outputs.should_run == 'true'
         id: preview
         env:
-          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
+          QIITA_TOKEN: ${{ secrets[steps.token.outputs.secret_name] }}
           API_BASE_URL: ${{ vars.API_BASE_URL || 'https://qiita.com/api/v2' }}
           UPLOAD_POLICIES_URL: ${{ vars.UPLOAD_POLICIES_URL || 'https://qiita.com/api/v2/upload/policies' }}
           GITITA_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
@@ -72,6 +133,7 @@ jobs:
           EOF
 
       - name: Commit qiita_id update
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -85,6 +147,7 @@ jobs:
           fi
 
       - name: Upload preview context
+        if: steps.gate.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: gitita-preview-context
