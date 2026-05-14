@@ -1,8 +1,6 @@
 name: Article AI Review
 
 on:
-  pull_request:
-    types: [ready_for_review]
   issue_comment:
     types: [created]
 
@@ -18,8 +16,6 @@ concurrency:
 jobs:
   ai-review:
     if: >-
-      (github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'article')) ||
       (github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/review'))
@@ -78,14 +74,6 @@ jobs:
             if (!shouldRun) {
               core.notice("Skip AI review: PR does not have 'article' label.");
             }
-
-      - name: Download preview context
-        if: steps.target.outputs.should_run == 'true'
-        uses: actions/download-artifact@v5
-        with:
-          name: gitita-preview-context
-          path: preview-context
-          if-no-files-found: ignore
 
       - name: Checkout PR head
         if: steps.target.outputs.should_run == 'true'
