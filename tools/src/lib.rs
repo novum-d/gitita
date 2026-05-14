@@ -1,3 +1,4 @@
+use clap::{Arg, ArgAction, Command as ClapCommand};
 use serde::Deserialize;
 use serde_yaml::Value;
 use std::error::Error;
@@ -61,7 +62,7 @@ impl Error for CliError {}
 
 pub fn run<I, S>(args: I) -> Result<(), CliError>
 where
-    I: IntoIterator<Item = S>,
+    I: IntoIterator<Item=S>,
     S: AsRef<str>,
 {
     match parse_command(args)? {
@@ -72,27 +73,45 @@ where
 
 pub fn parse_command<I, S>(args: I) -> Result<Command, CliError>
 where
-    I: IntoIterator<Item = S>,
+    I: IntoIterator<Item=S>,
     S: AsRef<str>,
 {
-    let args: Vec<String> = args
-        .into_iter()
-        .map(|arg| arg.as_ref().to_owned())
-        .collect();
+    let mut argv = vec!["gitita".to_owned()];
+    argv.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
 
-    match args.as_slice() {
-        [command] if command == "check" => Ok(Command::Check),
-        [command, args @ ..] if command == "publish" => {
-            let dry_run = args.iter().any(|arg| arg == "--dry-run");
+    let matches = clap_app()
+        .try_get_matches_from(argv)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    match matches.subcommand() {
+        Some(("check", _)) => Ok(Command::Check),
+        Some(("publish", sub_matches)) => {
+            let dry_run = sub_matches.get_flag("dry-run") || sub_matches.get_flag("preview");
             Ok(Command::Publish { dry_run })
         }
-        [] => Err(CliError::new(
+        _ => Err(CliError::new(
             "missing command: expected `check` or `publish`",
         )),
-        [command, ..] => Err(CliError::new(format!(
-            "unknown command or arguments: `{command}`"
-        ))),
     }
+}
+
+fn clap_app() -> ClapCommand {
+    ClapCommand::new("gitita")
+        .subcommand_required(true)
+        .subcommand(ClapCommand::new("check"))
+        .subcommand(
+            ClapCommand::new("publish")
+                .arg(
+                    Arg::new("dry-run")
+                        .long("dry-run")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("preview")
+                        .long("preview")
+                        .action(ArgAction::SetTrue),
+                ),
+        )
 }
 
 fn check() -> Result<(), CliError> {
@@ -323,8 +342,15 @@ mod tests {
 
     #[test]
     fn parses_publish_command_with_other_args_and_dry_run() {
+        let error = parse_command(["publish", "something", "--dry-run"])
+            .expect_err("unexpected args should fail");
+        assert!(error.to_string().contains("unexpected argument"));
+    }
+
+    #[test]
+    fn parses_publish_preview_command() {
         assert_eq!(
-            parse_command(["publish", "something", "--dry-run"]),
+            parse_command(["publish", "--preview"]),
             Ok(Command::Publish { dry_run: true })
         );
     }
@@ -333,7 +359,9 @@ mod tests {
     fn unknown_command_returns_error() {
         let error = parse_command(["unknown"]).expect_err("unknown command should fail");
 
-        assert_eq!(error.to_string(), "unknown command or arguments: `unknown`");
+        assert!(error
+            .to_string()
+            .contains("unrecognized subcommand 'unknown'"));
     }
 
     #[test]

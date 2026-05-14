@@ -96,5 +96,5 @@ fn unknown_command_fails_with_readable_message() {
     cmd.arg("unknown")
         .assert()
         .failure()
-        .stderr(contains("unknown command or arguments: `unknown`"));
+        .stderr(contains("unrecognized subcommand 'unknown'"));
 }
