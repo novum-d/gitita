@@ -1,4 +1,4 @@
-name: Preview Publish
+name: Article Preview Publish
 
 on:
   pull_request:

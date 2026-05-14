@@ -1,4 +1,4 @@
-name: AI Article Review
+name: Article AI Review
 
 on:
   workflow_run:
