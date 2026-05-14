@@ -4,7 +4,7 @@ tags:
   - Rust
   - Qiita
 author: "novumd"
-qiita_id: null
+qiita_id: "43c8a564d5c086558b8c"
 ---
 
 ![サンプルサムネイル（差し替え用）](./images/thumbnail.png)
