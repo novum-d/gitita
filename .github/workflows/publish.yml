@@ -19,12 +19,6 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Require article label on merged PR
         id: guard
         uses: actions/github-script@v8
@@ -50,6 +44,13 @@ jobs:
             if (!hasArticle) {
               core.notice(`Skip publish: merged PR #${mergedPr.number} does not have 'article' label.`);
             }
+
+      - name: Checkout
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Rust
         if: steps.guard.outputs.should_publish == 'true'

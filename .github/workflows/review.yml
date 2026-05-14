@@ -13,23 +13,36 @@ concurrency:
 
 jobs:
   review:
-    if: contains(github.event.pull_request.labels.*.name, 'article')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
+      - name: Resolve article label gate
+        id: gate
+        run: |
+          if [[ "${{ contains(github.event.pull_request.labels.*.name, 'article') }}" == "true" ]]; then
+            echo "should_check=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_check=false" >> "$GITHUB_OUTPUT"
+            echo "Skip article review check: article label is not set."
+          fi
+
       - name: Checkout
+        if: steps.gate.outputs.should_check == 'true'
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Rust
+        if: steps.gate.outputs.should_check == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
+        if: steps.gate.outputs.should_check == 'true'
         uses: Swatinem/rust-cache@v2
 
       - name: gitita check
+        if: steps.gate.outputs.should_check == 'true'
         env:
           GITITA_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
           GITITA_DIFF_HEAD: HEAD
