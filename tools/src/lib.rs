@@ -62,7 +62,7 @@ impl Error for CliError {}
 
 pub fn run<I, S>(args: I) -> Result<(), CliError>
 where
-    I: IntoIterator<Item=S>,
+    I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
     match parse_command(args)? {
@@ -73,7 +73,7 @@ where
 
 pub fn parse_command<I, S>(args: I) -> Result<Command, CliError>
 where
-    I: IntoIterator<Item=S>,
+    I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
     let mut argv = vec!["gitita".to_owned()];
