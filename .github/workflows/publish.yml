@@ -1,0 +1,216 @@
+name: Article Publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: gitita-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Require article label on merged PR
+        id: guard
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const commitSha = context.payload.after;
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: commitSha
+            });
+            const mergedPr = (prs.data || []).find(pr => pr.merged_at);
+            if (!mergedPr) {
+              core.setOutput('should_publish', 'false');
+              core.notice(`Skip publish: no merged PR associated with commit ${commitSha}.`);
+              return;
+            }
+
+            const labels = (mergedPr.labels || []).map(label => label.name);
+            const hasArticle = labels.includes('article');
+            core.setOutput('should_publish', hasArticle ? 'true' : 'false');
+            if (!hasArticle) {
+              core.notice(`Skip publish: merged PR #${mergedPr.number} does not have 'article' label.`);
+            }
+
+      - name: Checkout
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Rust
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        if: steps.guard.outputs.should_publish == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish public articles
+        if: steps.guard.outputs.should_publish == 'true'
+        id: publish
+        continue-on-error: true
+        env:
+          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
+          API_BASE_URL: ${{ vars.API_BASE_URL || 'https://qiita.com/api/v2' }}
+          UPLOAD_POLICIES_URL: ${{ vars.UPLOAD_POLICIES_URL || 'https://qiita.com/api/v2/upload/policies' }}
+          GITITA_DIFF_BASE: ${{ github.event.before }}
+          GITITA_DIFF_HEAD: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          cargo run -- publish 2>&1 | tee /tmp/gitita-publish.log
+
+      - name: Commit qiita_id update
+        if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'success'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add articles
+          if git diff --cached --quiet; then
+            echo "No qiita_id changes to commit."
+          else
+            git commit -m "chore: update published qiita_id"
+            git push
+          fi
+
+      - name: Comment published URL to PR
+        if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'success'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- gitita-published-url -->';
+            const {owner, repo} = context.repo;
+            const commitSha = context.payload.after;
+
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: commitSha
+            });
+            const mergedPr = (prs.data || []).find(pr => pr.merged_at);
+            if (!mergedPr) {
+              core.notice(`Skip publish comment: no merged PR associated with commit ${commitSha}.`);
+              return;
+            }
+
+            const log = fs.existsSync('/tmp/gitita-publish.log')
+              ? fs.readFileSync('/tmp/gitita-publish.log', 'utf8')
+              : '';
+            const lines = log.split('\n').filter(line => line.startsWith('published item: '));
+            if (lines.length === 0) {
+              core.notice('Skip publish comment: no published item lines found.');
+              return;
+            }
+
+            const items = lines.map(line => {
+              const parts = line.trim().split(/\s+/);
+              return {slug: parts[2] || 'unknown', url: parts[3] || ''};
+            }).filter(item => item.url.startsWith('http://') || item.url.startsWith('https://'));
+
+            if (items.length === 0) {
+              core.notice('Skip publish comment: published URLs were not parsed.');
+              return;
+            }
+
+            const body = [
+              marker,
+              '## Published Articles',
+              '',
+              ...items.map(item => `- \`${item.slug}\`: ${item.url}`)
+            ].join('\n');
+
+            const issue_number = mergedPr.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+            const existing = comments.find(comment => comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }
+
+      - name: Create or update publish failure issue
+        if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'failure'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const {execSync} = require('child_process');
+            const {owner, repo} = context.repo;
+            const changed = execSync('git diff --name-only ${{ github.event.before }} ${{ github.sha }} -- articles || true', {encoding: 'utf8'});
+            const slug = changed.split('\n').map(line => line.split('/')).find(parts => parts[0] === 'articles' && parts[1])?.[1] || 'unknown';
+            const title = `[publish-failed] ${slug}`;
+            const log = fs.existsSync('/tmp/gitita-publish.log') ? fs.readFileSync('/tmp/gitita-publish.log', 'utf8').slice(-12000) : 'No publish log was captured.';
+            const body = [
+              `Publish failed for \`${slug}\`.`,
+              '',
+              `Workflow run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+              '',
+              '```text',
+              log,
+              '```'
+            ].join('\n');
+
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100
+            });
+            const issue = existing.find(item => item.title === title);
+            const target = issue
+              ? await github.rest.issues.createComment({owner, repo, issue_number: issue.number, body})
+              : await github.rest.issues.create({owner, repo, title, body});
+
+            const articlePath = `articles/${slug}/article.md`;
+            if (fs.existsSync(articlePath)) {
+              const match = fs.readFileSync(articlePath, 'utf8').match(/^author:\s*"?([^"\n]+)"?/m);
+              const assignee = match?.[1]?.trim();
+              if (assignee) {
+                try {
+                  await github.rest.issues.addAssignees({
+                    owner,
+                    repo,
+                    issue_number: issue ? issue.number : target.data.number,
+                    assignees: [assignee]
+                  });
+                } catch (error) {
+                  core.warning(`Failed to assign ${assignee}: ${error.message}`);
+                }
+              }
+            }
+
+      - name: Fail publish workflow
+        if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'failure'
+        run: exit 1

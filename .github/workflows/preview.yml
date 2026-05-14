@@ -1,0 +1,91 @@
+name: Article Preview Publish
+
+on:
+  pull_request:
+    types: [ready_for_review, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'github-actions[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'article')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish private preview
+        id: preview
+        env:
+          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
+          API_BASE_URL: ${{ vars.API_BASE_URL || 'https://qiita.com/api/v2' }}
+          UPLOAD_POLICIES_URL: ${{ vars.UPLOAD_POLICIES_URL || 'https://qiita.com/api/v2/upload/policies' }}
+          GITITA_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
+          GITITA_DIFF_HEAD: HEAD
+        run: |
+          set -euo pipefail
+          cargo run -- publish --preview 2>&1 | tee /tmp/gitita-preview.log
+
+          published_line="$(grep '^published item:' /tmp/gitita-preview.log | tail -n 1 || true)"
+          if [ -z "$published_line" ]; then
+            echo "No preview item URL was emitted by gitita publish --preview" >&2
+            exit 1
+          fi
+
+          slug="$(printf '%s\n' "$published_line" | awk '{print $3}')"
+          preview_url="$(printf '%s\n' "$published_line" | awk '{print $5}')"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "preview_url=$preview_url" >> "$GITHUB_OUTPUT"
+
+          cat > /tmp/gitita-preview-context.json <<EOF
+          {
+            "pr": ${{ github.event.pull_request.number }},
+            "slug": "$slug",
+            "preview_url": "$preview_url",
+            "head_sha": "${{ github.event.pull_request.head.sha }}"
+          }
+          EOF
+
+      - name: Commit qiita_id update
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add articles
+          if git diff --cached --quiet; then
+            echo "No qiita_id changes to commit."
+          else
+            git commit -m "chore: update preview qiita_id"
+            git push
+          fi
+
+      - name: Upload preview context
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitita-preview-context
+          path: /tmp/gitita-preview-context.json
+          if-no-files-found: error

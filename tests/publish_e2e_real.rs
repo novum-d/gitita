@@ -79,6 +79,7 @@ async fn publish_create_and_update_matches_remote_item() {
                 is_new: true,
             }],
             &publisher,
+            true,
         )
         .await
         .map_err(|e| format!("publish create failed: {e}"))?;
@@ -126,6 +127,7 @@ async fn publish_create_and_update_matches_remote_item() {
                 is_new: false,
             }],
             &publisher,
+            true,
         )
         .await
         .map_err(|e| format!("publish update failed: {e}"))?;

@@ -90,11 +90,29 @@ fn publish_without_dry_run_requires_qiita_token() {
 }
 
 #[test]
+fn publish_preview_requires_qiita_token() {
+    let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
+
+    cmd.env("GITITA_DIFF_BASE", "HEAD")
+        .env("GITITA_DIFF_HEAD", "HEAD")
+        .env("API_BASE_URL", "https://example.invalid/api/v2")
+        .env(
+            "UPLOAD_POLICIES_URL",
+            "https://example.invalid/api/v2/upload_policies",
+        )
+        .env("QIITA_TOKEN", "")
+        .args(["publish", "--preview"])
+        .assert()
+        .failure()
+        .stderr(contains("QIITA_TOKEN environment variable is required"));
+}
+
+#[test]
 fn unknown_command_fails_with_readable_message() {
     let mut cmd = Command::cargo_bin("gitita").expect("failed to find gitita binary");
 
     cmd.arg("unknown")
         .assert()
         .failure()
-        .stderr(contains("unknown command or arguments: `unknown`"));
+        .stderr(contains("unrecognized subcommand 'unknown'"));
 }

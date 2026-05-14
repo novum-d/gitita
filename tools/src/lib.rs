@@ -1,3 +1,4 @@
+use clap::{Arg, ArgAction, Command as ClapCommand};
 use serde::Deserialize;
 use serde_yaml::Value;
 use std::error::Error;
@@ -35,7 +36,7 @@ where
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Check,
-    Publish { dry_run: bool },
+    Publish { dry_run: bool, preview: bool },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -66,7 +67,7 @@ where
 {
     match parse_command(args)? {
         Command::Check => check(),
-        Command::Publish { dry_run } => publish(dry_run),
+        Command::Publish { dry_run, preview } => publish(dry_run, preview),
     }
 }
 
@@ -75,24 +76,44 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    let args: Vec<String> = args
-        .into_iter()
-        .map(|arg| arg.as_ref().to_owned())
-        .collect();
+    let mut argv = vec!["gitita".to_owned()];
+    argv.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
 
-    match args.as_slice() {
-        [command] if command == "check" => Ok(Command::Check),
-        [command, args @ ..] if command == "publish" => {
-            let dry_run = args.iter().any(|arg| arg == "--dry-run");
-            Ok(Command::Publish { dry_run })
+    let matches = clap_app()
+        .try_get_matches_from(argv)
+        .map_err(|error| CliError::new(error.to_string()))?;
+
+    match matches.subcommand() {
+        Some(("check", _)) => Ok(Command::Check),
+        Some(("publish", sub_matches)) => {
+            let dry_run = sub_matches.get_flag("dry-run");
+            let preview = sub_matches.get_flag("preview");
+            Ok(Command::Publish { dry_run, preview })
         }
-        [] => Err(CliError::new(
+        _ => Err(CliError::new(
             "missing command: expected `check` or `publish`",
         )),
-        [command, ..] => Err(CliError::new(format!(
-            "unknown command or arguments: `{command}`"
-        ))),
     }
+}
+
+fn clap_app() -> ClapCommand {
+    ClapCommand::new("gitita")
+        .subcommand_required(true)
+        .subcommand(ClapCommand::new("check"))
+        .subcommand(
+            ClapCommand::new("publish")
+                .arg(
+                    Arg::new("dry-run")
+                        .long("dry-run")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("preview")
+                        .long("preview")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with("dry-run"),
+                ),
+        )
 }
 
 fn check() -> Result<(), CliError> {
@@ -176,8 +197,8 @@ pub(crate) fn validate_article(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn publish(dry_run: bool) -> Result<(), CliError> {
-    let options = workflow::PublishOptions::from_env(dry_run);
+fn publish(dry_run: bool, preview: bool) -> Result<(), CliError> {
+    let options = workflow::PublishOptions::from_env(dry_run, preview);
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|error| CliError::new(format!("failed to start async runtime: {error}")))?;
 
@@ -309,7 +330,10 @@ mod tests {
     fn parses_publish_dry_run_command() {
         assert_eq!(
             parse_command(["publish", "--dry-run"]),
-            Ok(Command::Publish { dry_run: true })
+            Ok(Command::Publish {
+                dry_run: true,
+                preview: false
+            })
         );
     }
 
@@ -317,15 +341,28 @@ mod tests {
     fn parses_publish_command_without_dry_run() {
         assert_eq!(
             parse_command(["publish"]),
-            Ok(Command::Publish { dry_run: false })
+            Ok(Command::Publish {
+                dry_run: false,
+                preview: false
+            })
         );
     }
 
     #[test]
     fn parses_publish_command_with_other_args_and_dry_run() {
+        let error = parse_command(["publish", "something", "--dry-run"])
+            .expect_err("unexpected args should fail");
+        assert!(error.to_string().contains("unexpected argument"));
+    }
+
+    #[test]
+    fn parses_publish_preview_command() {
         assert_eq!(
-            parse_command(["publish", "something", "--dry-run"]),
-            Ok(Command::Publish { dry_run: true })
+            parse_command(["publish", "--preview"]),
+            Ok(Command::Publish {
+                dry_run: false,
+                preview: true
+            })
         );
     }
 
@@ -333,7 +370,9 @@ mod tests {
     fn unknown_command_returns_error() {
         let error = parse_command(["unknown"]).expect_err("unknown command should fail");
 
-        assert_eq!(error.to_string(), "unknown command or arguments: `unknown`");
+        assert!(error
+            .to_string()
+            .contains("unrecognized subcommand 'unknown'"));
     }
 
     #[test]
