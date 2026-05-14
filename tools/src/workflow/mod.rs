@@ -15,14 +15,16 @@ use std::pin::Pin;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishOptions {
     pub dry_run: bool,
+    pub preview: bool,
     pub diff_base: String,
     pub diff_head: String,
 }
 
 impl PublishOptions {
-    pub fn from_env(dry_run: bool) -> Self {
+    pub fn from_env(dry_run: bool, preview: bool) -> Self {
         Self {
             dry_run,
+            preview,
             diff_base: std::env::var("GITITA_DIFF_BASE").unwrap_or_else(|_| "HEAD^".to_owned()),
             diff_head: std::env::var("GITITA_DIFF_HEAD").unwrap_or_else(|_| "HEAD".to_owned()),
         }
@@ -164,7 +166,7 @@ pub async fn publish(root: &Path, options: PublishOptions) -> Result<(), Workflo
     }
 
     let client = QiitaClient::from_env()?;
-    publish_changed_articles(root, &changed_articles, &client).await
+    publish_changed_articles(root, &changed_articles, &client, options.preview).await
 }
 
 pub fn dry_run_report(
@@ -194,10 +196,11 @@ pub async fn publish_changed_articles<P: QiitaPublisher>(
     root: &Path,
     changed_articles: &[ChangedArticle],
     publisher: &P,
+    preview: bool,
 ) -> Result<(), WorkflowError> {
     for changed_article in changed_articles {
         let article = prepare_article(root, &changed_article.slug)?;
-        publish_prepared_article(article, publisher).await?;
+        publish_prepared_article(article, publisher, preview).await?;
     }
 
     Ok(())
@@ -247,6 +250,7 @@ pub fn publish_action(qiita_id: Option<&str>) -> PublishAction {
 async fn publish_prepared_article<P: QiitaPublisher>(
     article: PreparedArticle,
     publisher: &P,
+    preview: bool,
 ) -> Result<(), WorkflowError> {
     let mut replacements = Vec::new();
 
@@ -256,15 +260,17 @@ async fn publish_prepared_article<P: QiitaPublisher>(
     }
 
     let body = markdown::replace_image_sources(&article.body, &replacements);
-    let request = QiitaArticleRequest::new(article.title, body, article.tags)?;
+    let request = QiitaArticleRequest::new(article.title, body, article.tags, preview)?;
 
     match publish_action(article.qiita_id.as_deref()) {
         PublishAction::Create => {
             let item = publisher.create_article(&request).await?;
             update_qiita_id(&article.path, &item.id)?;
+            println!("published item: {} {}", article.slug, item.url);
         }
         PublishAction::Update { qiita_id } => {
-            publisher.update_article(&qiita_id, &request).await?;
+            let item = publisher.update_article(&qiita_id, &request).await?;
+            println!("published item: {} {}", article.slug, item.url);
         }
     }
 

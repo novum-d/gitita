@@ -36,7 +36,7 @@ where
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Check,
-    Publish { dry_run: bool },
+    Publish { dry_run: bool, preview: bool },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -67,7 +67,7 @@ where
 {
     match parse_command(args)? {
         Command::Check => check(),
-        Command::Publish { dry_run } => publish(dry_run),
+        Command::Publish { dry_run, preview } => publish(dry_run, preview),
     }
 }
 
@@ -86,8 +86,9 @@ where
     match matches.subcommand() {
         Some(("check", _)) => Ok(Command::Check),
         Some(("publish", sub_matches)) => {
-            let dry_run = sub_matches.get_flag("dry-run") || sub_matches.get_flag("preview");
-            Ok(Command::Publish { dry_run })
+            let dry_run = sub_matches.get_flag("dry-run");
+            let preview = sub_matches.get_flag("preview");
+            Ok(Command::Publish { dry_run, preview })
         }
         _ => Err(CliError::new(
             "missing command: expected `check` or `publish`",
@@ -109,7 +110,8 @@ fn clap_app() -> ClapCommand {
                 .arg(
                     Arg::new("preview")
                         .long("preview")
-                        .action(ArgAction::SetTrue),
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with("dry-run"),
                 ),
         )
 }
@@ -195,8 +197,8 @@ pub(crate) fn validate_article(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn publish(dry_run: bool) -> Result<(), CliError> {
-    let options = workflow::PublishOptions::from_env(dry_run);
+fn publish(dry_run: bool, preview: bool) -> Result<(), CliError> {
+    let options = workflow::PublishOptions::from_env(dry_run, preview);
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|error| CliError::new(format!("failed to start async runtime: {error}")))?;
 
@@ -328,7 +330,10 @@ mod tests {
     fn parses_publish_dry_run_command() {
         assert_eq!(
             parse_command(["publish", "--dry-run"]),
-            Ok(Command::Publish { dry_run: true })
+            Ok(Command::Publish {
+                dry_run: true,
+                preview: false
+            })
         );
     }
 
@@ -336,7 +341,10 @@ mod tests {
     fn parses_publish_command_without_dry_run() {
         assert_eq!(
             parse_command(["publish"]),
-            Ok(Command::Publish { dry_run: false })
+            Ok(Command::Publish {
+                dry_run: false,
+                preview: false
+            })
         );
     }
 
@@ -351,7 +359,10 @@ mod tests {
     fn parses_publish_preview_command() {
         assert_eq!(
             parse_command(["publish", "--preview"]),
-            Ok(Command::Publish { dry_run: true })
+            Ok(Command::Publish {
+                dry_run: false,
+                preview: true
+            })
         );
     }
 

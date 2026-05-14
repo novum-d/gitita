@@ -267,12 +267,13 @@ impl QiitaArticleRequest {
         title: impl Into<String>,
         body: impl Into<String>,
         tags: Vec<QiitaTag>,
+        private: bool,
     ) -> Result<Self, QiitaError> {
         let request = Self {
             title: title.into(),
             body: body.into(),
             tags,
-            private: env::var("PRIVATE").map(|v| v == "true").unwrap_or(true),
+            private,
             organization_url_name: env::var("ORGANIZATION_URL_NAME")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -486,6 +487,7 @@ mod tests {
             "Rust CLI",
             "# Body",
             vec![QiitaTag::with_versions("Rust", vec!["1.80".to_owned()])],
+            true,
         )
         .expect("valid request should be accepted");
 
@@ -510,7 +512,8 @@ mod tests {
 
     #[test]
     fn article_request_rejects_empty_required_fields() {
-        let error = QiitaArticleRequest::new("", "body", vec![QiitaTag::new("Rust")]).unwrap_err();
+        let error =
+            QiitaArticleRequest::new("", "body", vec![QiitaTag::new("Rust")], true).unwrap_err();
 
         assert_eq!(
             error.to_string(),
