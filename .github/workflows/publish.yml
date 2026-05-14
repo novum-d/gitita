@@ -41,6 +41,7 @@ jobs:
             const labels = (mergedPr.labels || []).map(label => label.name);
             const hasArticle = labels.includes('article');
             core.setOutput('should_publish', hasArticle ? 'true' : 'false');
+            core.setOutput('pr_author', mergedPr.user?.login || '');
             if (!hasArticle) {
               core.notice(`Skip publish: merged PR #${mergedPr.number} does not have 'article' label.`);
             }
@@ -60,12 +61,53 @@ jobs:
         if: steps.guard.outputs.should_publish == 'true'
         uses: Swatinem/rust-cache@v2
 
+      - name: Resolve Qiita token secret
+        if: steps.guard.outputs.should_publish == 'true'
+        id: token
+        uses: actions/github-script@v8
+        env:
+          QIITA_TOKEN_MAP_JSON: ${{ vars.QIITA_TOKEN_MAP_JSON || '' }}
+          PR_AUTHOR: ${{ steps.guard.outputs.pr_author }}
+        with:
+          script: |
+            const author = process.env.PR_AUTHOR;
+            const fallback = 'QIITA_TOKEN';
+            let secretName = fallback;
+
+            const raw = (process.env.QIITA_TOKEN_MAP_JSON || '').trim();
+            if (raw) {
+              try {
+                const map = JSON.parse(raw);
+                if (typeof map[author] === 'string' && map[author].trim()) {
+                  secretName = map[author].trim();
+                } else if (typeof map.default === 'string' && map.default.trim()) {
+                  secretName = map.default.trim();
+                }
+              } catch (error) {
+                core.warning(`Failed to parse QIITA_TOKEN_MAP_JSON: ${error.message}`);
+              }
+            }
+
+            core.notice(`Selected Qiita token secret for ${author}: ${secretName}`);
+            core.setOutput('secret_name', secretName);
+
+      - name: Validate resolved Qiita token
+        if: steps.guard.outputs.should_publish == 'true'
+        env:
+          QIITA_TOKEN: ${{ secrets[steps.token.outputs.secret_name] }}
+        run: |
+          set -euo pipefail
+          if [ -z "${QIITA_TOKEN:-}" ]; then
+            echo "Resolved secret is empty or not found: ${{ steps.token.outputs.secret_name }}" >&2
+            exit 1
+          fi
+
       - name: Publish public articles
         if: steps.guard.outputs.should_publish == 'true'
         id: publish
         continue-on-error: true
         env:
-          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
+          QIITA_TOKEN: ${{ secrets[steps.token.outputs.secret_name] }}
           API_BASE_URL: ${{ vars.API_BASE_URL || 'https://qiita.com/api/v2' }}
           UPLOAD_POLICIES_URL: ${{ vars.UPLOAD_POLICIES_URL || 'https://qiita.com/api/v2/upload/policies' }}
           GITITA_DIFF_BASE: ${{ github.event.before }}
