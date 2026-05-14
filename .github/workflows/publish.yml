@@ -87,6 +87,78 @@ jobs:
             git push
           fi
 
+      - name: Comment published URL to PR
+        if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'success'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- gitita-published-url -->';
+            const {owner, repo} = context.repo;
+            const commitSha = context.payload.after;
+
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: commitSha
+            });
+            const mergedPr = (prs.data || []).find(pr => pr.merged_at);
+            if (!mergedPr) {
+              core.notice(`Skip publish comment: no merged PR associated with commit ${commitSha}.`);
+              return;
+            }
+
+            const log = fs.existsSync('/tmp/gitita-publish.log')
+              ? fs.readFileSync('/tmp/gitita-publish.log', 'utf8')
+              : '';
+            const lines = log.split('\n').filter(line => line.startsWith('published item: '));
+            if (lines.length === 0) {
+              core.notice('Skip publish comment: no published item lines found.');
+              return;
+            }
+
+            const items = lines.map(line => {
+              const parts = line.trim().split(/\s+/);
+              return {slug: parts[2] || 'unknown', url: parts[3] || ''};
+            }).filter(item => item.url.startsWith('http://') || item.url.startsWith('https://'));
+
+            if (items.length === 0) {
+              core.notice('Skip publish comment: published URLs were not parsed.');
+              return;
+            }
+
+            const body = [
+              marker,
+              '## Published Articles',
+              '',
+              ...items.map(item => `- \`${item.slug}\`: ${item.url}`)
+            ].join('\n');
+
+            const issue_number = mergedPr.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+            const existing = comments.find(comment => comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }
+
       - name: Create or update publish failure issue
         if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'failure'
         uses: actions/github-script@v8
