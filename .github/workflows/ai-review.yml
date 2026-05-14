@@ -73,6 +73,14 @@ jobs:
               core.notice("Skip AI review: PR does not have 'article' label.");
             }
 
+      - name: Download preview context
+        if: steps.target.outputs.should_run == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          name: gitita-preview-context
+          path: preview-context
+          if-no-files-found: ignore
+
       - name: Checkout PR head
         if: steps.target.outputs.should_run == 'true'
         uses: actions/checkout@v5
@@ -99,6 +107,7 @@ jobs:
             const baseSha = process.env.BASE_SHA;
             const headSha = process.env.HEAD_SHA;
             const prNumber = Number(process.env.PR_NUMBER);
+            let previewUrl = '(preview URL not found)';
 
             const changed = execSync(`git diff --name-only ${baseSha} ${headSha} -- articles`, {encoding: 'utf8'});
             const slug = changed
@@ -165,15 +174,28 @@ jobs:
             }
 
             const review = await aiReview();
+            const contextPath = 'preview-context/gitita-preview-context.json';
+            if (fs.existsSync(contextPath)) {
+              try {
+                const preview = JSON.parse(fs.readFileSync(contextPath, 'utf8'));
+                if (preview?.preview_url) {
+                  previewUrl = preview.preview_url;
+                }
+              } catch (error) {
+                core.warning(`Failed to parse preview context: ${error.message}`);
+              }
+            }
             const body = [
               marker,
               '## AI Article Review',
               '',
               `Trigger: ${process.env.REVIEW_REASON}`,
               '',
+              'Preview:',
+              previewUrl,
+              '',
               review
             ].join('\n');
-
             const {owner, repo} = context.repo;
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
