@@ -25,13 +25,42 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Require article label on merged PR
+        id: guard
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const commitSha = context.payload.after;
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner,
+              repo,
+              commit_sha: commitSha
+            });
+            const mergedPr = (prs.data || []).find(pr => pr.merged_at);
+            if (!mergedPr) {
+              core.setOutput('should_publish', 'false');
+              core.notice(`Skip publish: no merged PR associated with commit ${commitSha}.`);
+              return;
+            }
+
+            const labels = (mergedPr.labels || []).map(label => label.name);
+            const hasArticle = labels.includes('article');
+            core.setOutput('should_publish', hasArticle ? 'true' : 'false');
+            if (!hasArticle) {
+              core.notice(`Skip publish: merged PR #${mergedPr.number} does not have 'article' label.`);
+            }
+
       - name: Setup Rust
+        if: steps.guard.outputs.should_publish == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
+        if: steps.guard.outputs.should_publish == 'true'
         uses: Swatinem/rust-cache@v2
 
       - name: Publish public articles
+        if: steps.guard.outputs.should_publish == 'true'
         id: publish
         continue-on-error: true
         env:
@@ -45,7 +74,7 @@ jobs:
           cargo run -- publish 2>&1 | tee /tmp/gitita-publish.log
 
       - name: Commit qiita_id update
-        if: steps.publish.outcome == 'success'
+        if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'success'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -59,7 +88,7 @@ jobs:
           fi
 
       - name: Create or update publish failure issue
-        if: steps.publish.outcome == 'failure'
+        if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'failure'
         uses: actions/github-script@v8
         with:
           script: |
@@ -110,5 +139,5 @@ jobs:
             }
 
       - name: Fail publish workflow
-        if: steps.publish.outcome == 'failure'
+        if: steps.guard.outputs.should_publish == 'true' && steps.publish.outcome == 'failure'
         run: exit 1

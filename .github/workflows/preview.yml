@@ -2,7 +2,7 @@ name: Preview Publish
 
 on:
   pull_request:
-    types: [ready_for_review, synchronize, reopened]
+    types: [ready_for_review, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: write
@@ -18,7 +18,8 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'github-actions[bot]'
+      github.actor != 'github-actions[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'article')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

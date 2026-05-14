@@ -30,13 +30,35 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: preview-context
 
+      - name: Require article label on PR
+        id: guard
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const preview = JSON.parse(fs.readFileSync('preview-context/gitita-preview-context.json', 'utf8'));
+            const {owner, repo} = context.repo;
+            const pr = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: preview.pr
+            });
+            const labels = (pr.data.labels || []).map(label => label.name);
+            const hasArticle = labels.includes('article');
+            core.setOutput('has_article_label', hasArticle ? 'true' : 'false');
+            if (!hasArticle) {
+              core.notice(`Skip AI review: PR #${preview.pr} does not have 'article' label.`);
+            }
+
       - name: Checkout preview source
+        if: steps.guard.outputs.has_article_label == 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 1
 
       - name: Comment AI article review
+        if: steps.guard.outputs.has_article_label == 'true'
         uses: actions/github-script@v8
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

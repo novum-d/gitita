@@ -2,7 +2,7 @@ name: Review
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   review:
+    if: contains(github.event.pull_request.labels.*.name, 'article')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
