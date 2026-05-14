@@ -2,7 +2,7 @@ name: Article Preview Publish
 
 on:
   pull_request:
-    types: [ready_for_review, synchronize, reopened, labeled, unlabeled]
+    types: [ready_for_review, synchronize]
 
 permissions:
   contents: write

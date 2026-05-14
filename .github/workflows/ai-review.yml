@@ -1,75 +1,122 @@
 name: Article AI Review
 
 on:
-  workflow_run:
-    workflows: ["Preview Publish"]
-    types: [completed]
+  pull_request:
+    types: [ready_for_review]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
-  actions: read
   issues: write
   pull-requests: read
 
 concurrency:
-  group: ai-review-${{ github.event.workflow_run.id }}
+  group: ai-review-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
   ai-review:
-    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Download preview context
-        uses: actions/download-artifact@v5
-        with:
-          name: gitita-preview-context
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: preview-context
-
-      - name: Require article label on PR
-        id: guard
+      - name: Resolve review target
+        id: target
         uses: actions/github-script@v8
         with:
           script: |
-            const fs = require('fs');
-            const preview = JSON.parse(fs.readFileSync('preview-context/gitita-preview-context.json', 'utf8'));
-            const {owner, repo} = context.repo;
-            const pr = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number: preview.pr
-            });
-            const labels = (pr.data.labels || []).map(label => label.name);
-            const hasArticle = labels.includes('article');
-            core.setOutput('has_article_label', hasArticle ? 'true' : 'false');
-            if (!hasArticle) {
-              core.notice(`Skip AI review: PR #${preview.pr} does not have 'article' label.`);
+            const eventName = context.eventName;
+            let shouldRun = false;
+            let reason = '';
+            let prNumber = null;
+            let headSha = null;
+            let baseSha = null;
+            let labels = [];
+
+            if (eventName === 'pull_request') {
+              const pr = context.payload.pull_request;
+              prNumber = pr.number;
+              headSha = pr.head.sha;
+              baseSha = pr.base.sha;
+              labels = (pr.labels || []).map(label => label.name);
+              shouldRun = labels.includes('article');
+              reason = 'ready_for_review';
+            } else if (eventName === 'issue_comment') {
+              const issue = context.payload.issue;
+              const body = context.payload.comment?.body || '';
+              if (!issue.pull_request || !body.trim().startsWith('/review')) {
+                core.setOutput('should_run', 'false');
+                core.notice('Skip AI review: not a PR comment or missing /review command.');
+                return;
+              }
+              prNumber = issue.number;
+              const {owner, repo} = context.repo;
+              const pr = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: prNumber
+              });
+              headSha = pr.data.head.sha;
+              baseSha = pr.data.base.sha;
+              labels = (pr.data.labels || []).map(label => label.name);
+              shouldRun = labels.includes('article');
+              reason = 'slash_review';
             }
 
-      - name: Checkout preview source
-        if: steps.guard.outputs.has_article_label == 'true'
+            core.setOutput('should_run', shouldRun ? 'true' : 'false');
+            core.setOutput('pr_number', String(prNumber || ''));
+            core.setOutput('head_sha', String(headSha || ''));
+            core.setOutput('base_sha', String(baseSha || ''));
+            core.setOutput('reason', reason);
+            if (!shouldRun) {
+              core.notice("Skip AI review: PR does not have 'article' label.");
+            }
+
+      - name: Checkout PR head
+        if: steps.target.outputs.should_run == 'true'
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 1
+          ref: ${{ steps.target.outputs.head_sha }}
+          fetch-depth: 0
 
       - name: Comment AI article review
-        if: steps.guard.outputs.has_article_label == 'true'
+        if: steps.target.outputs.should_run == 'true'
         uses: actions/github-script@v8
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4.1-mini' }}
+          PR_NUMBER: ${{ steps.target.outputs.pr_number }}
+          BASE_SHA: ${{ steps.target.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.target.outputs.head_sha }}
+          REVIEW_REASON: ${{ steps.target.outputs.reason }}
         with:
           script: |
             const fs = require('fs');
+            const {execSync} = require('child_process');
             const marker = '<!-- gitita-ai-review -->';
-            const preview = JSON.parse(fs.readFileSync('preview-context/gitita-preview-context.json', 'utf8'));
             const rules = fs.readFileSync('docs/ai/QIITA_REVIEW_RULES.md', 'utf8');
-            const articlePath = `articles/${preview.slug}/article.md`;
+            const baseSha = process.env.BASE_SHA;
+            const headSha = process.env.HEAD_SHA;
+            const prNumber = Number(process.env.PR_NUMBER);
+
+            const changed = execSync(`git diff --name-only ${baseSha} ${headSha} -- articles`, {encoding: 'utf8'});
+            const slug = changed
+              .split('\n')
+              .map(line => line.split('/'))
+              .find(parts => parts[0] === 'articles' && parts[1])?.[1];
+
+            if (!slug) {
+              core.notice('Skip AI review: no changed article found.');
+              return;
+            }
+
+            const articlePath = `articles/${slug}/article.md`;
+            if (!fs.existsSync(articlePath)) {
+              core.notice(`Skip AI review: article file not found for slug ${slug}.`);
+              return;
+            }
+
             const article = fs.readFileSync(articlePath, 'utf8');
 
             async function aiReview() {
@@ -77,10 +124,10 @@ jobs:
               if (!key) {
                 return [
                   '### Good',
-                  '- プレビュー記事の作成または更新は完了しています。',
+                  '- 記事差分は検出できています。',
                   '',
                   '### Suggestions',
-                  '[suggestion] OPENAI_API_KEY が設定されていないため、AI による本文レビューは実行されていません。',
+                  '[suggestion] OPENAI_API_KEY が未設定のため、AI レビュー本文は生成されていません。',
                   '',
                   '### Warnings',
                   '- なし'
@@ -102,7 +149,7 @@ jobs:
                     },
                     {
                       role: 'user',
-                      content: `Review rules:\n${rules}\n\nPreview URL:\n${preview.preview_url}\n\nArticle Markdown:\n${article}`
+                      content: `Review reason: ${process.env.REVIEW_REASON}\n\nReview rules:\n${rules}\n\nArticle Markdown:\n${article}`
                     }
                   ]
                 })
@@ -122,18 +169,16 @@ jobs:
               marker,
               '## AI Article Review',
               '',
-              'Preview:',
-              preview.preview_url,
+              `Trigger: ${process.env.REVIEW_REASON}`,
               '',
               review
             ].join('\n');
 
             const {owner, repo} = context.repo;
-            const issue_number = preview.pr;
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
               repo,
-              issue_number,
+              issue_number: prNumber,
               per_page: 100
             });
             const existing = comments.find(comment => comment.body?.includes(marker));
@@ -149,7 +194,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner,
                 repo,
-                issue_number,
+                issue_number: prNumber,
                 body
               });
             }
