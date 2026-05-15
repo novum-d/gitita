@@ -9,7 +9,7 @@ on:
 permissions:
   contents: write
   issues: write
-  pull-requests: read
+  pull-requests: write
   actions: write
 
 concurrency:
@@ -169,6 +169,12 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download preview context
+        uses: actions/download-artifact@v4
+        with:
+          name: gitita-preview-context
+          path: preview-context
+
       - name: Comment AI article review
         uses: actions/github-script@v8
         env:
@@ -177,6 +183,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           REVIEW_REASON: preview_publish
         with:
           script: |
@@ -208,27 +215,30 @@ jobs:
 
             const article = fs.readFileSync(articlePath, 'utf8');
 
-            const publishedLine = fs.existsSync('/tmp/gitita-preview.log')
-              ? fs.readFileSync('/tmp/gitita-preview.log', 'utf8').split('\n').filter(line => line.startsWith('published item: ')).pop()
-              : '';
-            if (publishedLine) {
-              const parts = publishedLine.trim().split(/\s+/);
-              if (parts[4] && (parts[4].startsWith('http://') || parts[4].startsWith('https://'))) {
-                previewUrl = parts[4];
-              }
+            function frontmatterValue(name) {
+              const match = article.match(new RegExp(`^${name}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\n#]+))`, 'm'));
+              const value = (match?.[1] || match?.[2] || match?.[3] || '').trim();
+              return value && value !== 'null' ? value : '';
+            }
+
+            function previewUrlFromArticle() {
+              const author = process.env.PR_AUTHOR || frontmatterValue('author');
+              const qiitaId = frontmatterValue('qiita_id');
+              if (!author || !qiitaId) return '';
+              return `https://qiita.com/${author}/private/${qiitaId}`;
             }
 
             async function aiReview() {
               const key = process.env.OPENAI_API_KEY;
               if (!key) {
                 return [
-                  '### Good',
+                  '### 良い点',
                   '- 記事差分は検出できています。',
                   '',
-                  '### Suggestions',
+                  '### 提案',
                   '[suggestion] OPENAI_API_KEY が未設定のため、AI レビュー本文は生成されていません。',
                   '',
-                  '### Warnings',
+                  '### 注意点',
                   '- なし'
                 ].join('\n');
               }
@@ -244,11 +254,11 @@ jobs:
                   input: [
                     {
                       role: 'system',
-                      content: 'You review Qiita article drafts only. Return concise Markdown sections: ### Good, ### Suggestions, ### Warnings. Use at most 3 suggestions and 2 warnings. Only use [suggestion] and [warning] severity labels.'
+                      content: 'Qiita 記事ドラフトだけをレビューしてください。必ず日本語で、簡潔な Markdown セクション「### 良い点」「### 提案」「### 注意点」を返してください。提案は最大 3 件、注意点は最大 2 件にしてください。severity label は [suggestion] と [warning] だけを使ってください。'
                     },
                     {
                       role: 'user',
-                      content: `Review reason: ${process.env.REVIEW_REASON}\n\nReview rules:\n${rules}\n\nArticle Markdown:\n${article}`
+                      content: `レビュー理由: ${process.env.REVIEW_REASON}\n\nレビュー規則:\n${rules}\n\n記事 Markdown:\n${article}`
                     }
                   ]
                 })
@@ -260,17 +270,31 @@ jobs:
               }
 
               const data = await response.json();
-              return data.output_text || data.output?.flatMap(item => item.content || []).map(part => part.text || '').join('\n') || '### Good\n- レビュー結果を取得できませんでした。\n\n### Suggestions\n- なし\n\n### Warnings\n- なし';
+              return data.output_text || data.output?.flatMap(item => item.content || []).map(part => part.text || '').join('\n') || '### 良い点\n- レビュー結果を取得できませんでした。\n\n### 提案\n- なし\n\n### 注意点\n- なし';
             }
 
             const review = await aiReview();
+            const contextPath = 'preview-context/gitita-preview-context.json';
+            if (fs.existsSync(contextPath)) {
+              try {
+                const preview = JSON.parse(fs.readFileSync(contextPath, 'utf8'));
+                if (preview?.preview_url) {
+                  previewUrl = preview.preview_url;
+                }
+              } catch (error) {
+                core.warning(`Failed to parse preview context: ${error.message}`);
+              }
+            }
+            if (previewUrl === '(preview URL not found)') {
+              previewUrl = previewUrlFromArticle() || previewUrl;
+            }
             const body = [
               marker,
-              '## AI Article Review',
+              '## AI 記事レビュー',
               '',
-              `Trigger: ${process.env.REVIEW_REASON}`,
+              `トリガー: ${process.env.REVIEW_REASON}`,
               '',
-              'Preview:',
+              'プレビュー:',
               previewUrl,
               '',
               review

@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 concurrency:
   group: ai-review-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
@@ -34,6 +34,7 @@ jobs:
             let prNumber = null;
             let headSha = null;
             let baseSha = null;
+            let prAuthor = null;
             let labels = [];
 
             if (eventName === 'pull_request') {
@@ -41,6 +42,7 @@ jobs:
               prNumber = pr.number;
               headSha = pr.head.sha;
               baseSha = pr.base.sha;
+              prAuthor = pr.user?.login || '';
               labels = (pr.labels || []).map(label => label.name);
               shouldRun = labels.includes('article');
               reason = 'ready_for_review';
@@ -61,6 +63,7 @@ jobs:
               });
               headSha = pr.data.head.sha;
               baseSha = pr.data.base.sha;
+              prAuthor = pr.data.user?.login || '';
               labels = (pr.data.labels || []).map(label => label.name);
               shouldRun = labels.includes('article');
               reason = 'slash_review';
@@ -70,6 +73,7 @@ jobs:
             core.setOutput('pr_number', String(prNumber || ''));
             core.setOutput('head_sha', String(headSha || ''));
             core.setOutput('base_sha', String(baseSha || ''));
+            core.setOutput('pr_author', String(prAuthor || ''));
             core.setOutput('reason', reason);
             if (!shouldRun) {
               core.notice("Skip AI review: PR does not have 'article' label.");
@@ -91,6 +95,7 @@ jobs:
           PR_NUMBER: ${{ steps.target.outputs.pr_number }}
           BASE_SHA: ${{ steps.target.outputs.base_sha }}
           HEAD_SHA: ${{ steps.target.outputs.head_sha }}
+          PR_AUTHOR: ${{ steps.target.outputs.pr_author }}
           REVIEW_REASON: ${{ steps.target.outputs.reason }}
         with:
           script: |
@@ -122,17 +127,30 @@ jobs:
 
             const article = fs.readFileSync(articlePath, 'utf8');
 
+            function frontmatterValue(name) {
+              const match = article.match(new RegExp(`^${name}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\n#]+))`, 'm'));
+              const value = (match?.[1] || match?.[2] || match?.[3] || '').trim();
+              return value && value !== 'null' ? value : '';
+            }
+
+            function previewUrlFromArticle() {
+              const author = process.env.PR_AUTHOR || frontmatterValue('author');
+              const qiitaId = frontmatterValue('qiita_id');
+              if (!author || !qiitaId) return '';
+              return `https://qiita.com/${author}/private/${qiitaId}`;
+            }
+
             async function aiReview() {
               const key = process.env.OPENAI_API_KEY;
               if (!key) {
                 return [
-                  '### Good',
+                  '### 良い点',
                   '- 記事差分は検出できています。',
                   '',
-                  '### Suggestions',
+                  '### 提案',
                   '[suggestion] OPENAI_API_KEY が未設定のため、AI レビュー本文は生成されていません。',
                   '',
-                  '### Warnings',
+                  '### 注意点',
                   '- なし'
                 ].join('\n');
               }
@@ -148,11 +166,11 @@ jobs:
                   input: [
                     {
                       role: 'system',
-                      content: 'You review Qiita article drafts only. Return concise Markdown sections: ### Good, ### Suggestions, ### Warnings. Use at most 3 suggestions and 2 warnings. Only use [suggestion] and [warning] severity labels.'
+                      content: 'Qiita 記事ドラフトだけをレビューしてください。必ず日本語で、簡潔な Markdown セクション「### 良い点」「### 提案」「### 注意点」を返してください。提案は最大 3 件、注意点は最大 2 件にしてください。severity label は [suggestion] と [warning] だけを使ってください。'
                     },
                     {
                       role: 'user',
-                      content: `Review reason: ${process.env.REVIEW_REASON}\n\nReview rules:\n${rules}\n\nArticle Markdown:\n${article}`
+                      content: `レビュー理由: ${process.env.REVIEW_REASON}\n\nレビュー規則:\n${rules}\n\n記事 Markdown:\n${article}`
                     }
                   ]
                 })
@@ -164,7 +182,7 @@ jobs:
               }
 
               const data = await response.json();
-              return data.output_text || data.output?.flatMap(item => item.content || []).map(part => part.text || '').join('\n') || '### Good\n- レビュー結果を取得できませんでした。\n\n### Suggestions\n- なし\n\n### Warnings\n- なし';
+              return data.output_text || data.output?.flatMap(item => item.content || []).map(part => part.text || '').join('\n') || '### 良い点\n- レビュー結果を取得できませんでした。\n\n### 提案\n- なし\n\n### 注意点\n- なし';
             }
 
             const review = await aiReview();
@@ -179,13 +197,16 @@ jobs:
                 core.warning(`Failed to parse preview context: ${error.message}`);
               }
             }
+            if (previewUrl === '(preview URL not found)') {
+              previewUrl = previewUrlFromArticle() || previewUrl;
+            }
             const body = [
               marker,
-              '## AI Article Review',
+              '## AI 記事レビュー',
               '',
-              `Trigger: ${process.env.REVIEW_REASON}`,
+              `トリガー: ${process.env.REVIEW_REASON}`,
               '',
-              'Preview:',
+              'プレビュー:',
               previewUrl,
               '',
               review
